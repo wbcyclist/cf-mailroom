@@ -1,3 +1,4 @@
+import { useI18n } from "../LanguageProvider";
 import type { Mailbox } from "../../shared/types";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ export function Sidebar(props: {
   onOpenSettings: () => void;
   onCompose: () => void;
 }) {
+  const { t } = useI18n();
   const totalUnread = props.mailboxes.reduce((sum, mailbox) => sum + mailbox.unread_count, 0);
 
   return (
@@ -30,17 +32,17 @@ export function Sidebar(props: {
         </p>
       </div>
 
-      <nav aria-label="Mail" className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-4">
+      <nav aria-label={t("Mail")} className="min-h-0 flex-1 overflow-y-auto px-2 pt-1 pb-4">
         <div className="space-y-px">
           <SidebarItem
-            label="All inboxes"
+            label={t("All inboxes")}
             icon={<InboxIcon className="h-4 w-4" />}
             unread={totalUnread}
             active={props.activeView === "inbox" && props.selected === null}
             onClick={() => props.onSelect(null)}
           />
           {props.mailboxes.length > 0 && (
-            <div role="group" aria-label="Inboxes" className="ml-[18px] space-y-px border-l pl-[7px]">
+            <div role="group" aria-label={t("Inboxes")} className="ml-[18px] space-y-px border-l pl-[7px]">
               {props.mailboxes.map((mailbox) => (
                 <SidebarItem
                   key={mailbox.id}
@@ -53,7 +55,7 @@ export function Sidebar(props: {
             </div>
           )}
           <SidebarItem
-            label="Archive"
+            label={t("Archive")}
             icon={<ArchiveIcon className="h-4 w-4" />}
             unread={0}
             active={props.activeView === "archive"}
@@ -70,13 +72,13 @@ export function Sidebar(props: {
           className="h-9 w-full justify-start gap-2.5 rounded-md px-2.5 text-[13px]"
         >
           <SquarePen className="h-4 w-4" aria-hidden="true" />
-          Compose
+          {t("Compose")}
         </Button>
       </div>
 
       <div className="shrink-0 border-t px-3 py-2">
         <SidebarItem
-          label="Settings"
+          label={t("Settings")}
           icon={<SettingsIcon className="h-4 w-4" />}
           unread={0}
           active={props.activeView === "settings"}
@@ -94,6 +96,7 @@ function SidebarItem(props: {
   active: boolean;
   onClick: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <button
       type="button"
@@ -125,7 +128,7 @@ function SidebarItem(props: {
             props.active ? "font-semibold text-foreground" : "font-medium text-muted-foreground",
           )}
         >
-          <span className="sr-only">, unread: </span>
+          <span className="sr-only">{t(", unread: ")}</span>
           {props.unread > 99 ? "99+" : props.unread}
         </span>
       )}

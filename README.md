@@ -28,6 +28,8 @@ Mail metadata, raw MIME, and attachments are stored in PostgreSQL.
 - **Compose and reply**: new mail and threaded replies, with attachments.
 - **Search and triage**: full-text search, unread/draft filters, bulk mark-read and archive, and restore archived conversations.
 - **Browser notifications**: opt-in Web Push alerts for new messages.
+- **English and Simplified Chinese**: the interface follows your browser language. Change it in Settings → General → Language; the choice is saved in that browser and also applies to push notifications. Email content, inbox instructions, and user-defined labels stay in their original language.
+- **Display time zone**: message dates and times follow your browser by default. Choose a time zone in Settings → General → Time zone; the choice is saved in that browser. Named time zones apply daylight saving rules automatically.
 
 **AI assistance**
 

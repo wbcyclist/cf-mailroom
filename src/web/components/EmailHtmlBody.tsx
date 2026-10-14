@@ -1,3 +1,4 @@
+import { useI18n } from "../LanguageProvider";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Attachment } from "../../shared/types";
 import { buildEmailHtmlDocument, inlineImageCandidates } from "../email-html";
@@ -15,6 +16,7 @@ export function EmailHtmlBody({
   attachments: Attachment[];
   sender: string;
 }) {
+  const { t } = useI18n();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
   const [imageSources, setImageSources] = useState<ReadonlyMap<number, string>>(new Map());
@@ -35,8 +37,11 @@ export function EmailHtmlBody({
     };
   }, [imageKey]);
   const sourceDocument = useMemo(
-    () => buildEmailHtmlDocument(html, attachments, imageSources),
-    [attachments, html, imageSources],
+    () => buildEmailHtmlDocument(html, attachments, imageSources, {
+      show: t("Show quoted text"),
+      hide: t("Hide quoted text"),
+    }),
+    [attachments, html, imageSources, t],
   );
 
   useEffect(
@@ -72,10 +77,10 @@ export function EmailHtmlBody({
 
   return (
     <>
-      <p className="mt-3 text-xs text-muted-foreground">External images are blocked.</p>
+      <p className="mt-3 text-xs text-muted-foreground">{t("External images are blocked.")}</p>
       <iframe
         ref={frameRef}
-        title={`Email from ${sender}`}
+        title={t("Email from {sender}", { sender })}
         srcDoc={sourceDocument}
         sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
         onLoad={fitContent}

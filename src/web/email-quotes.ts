@@ -3,7 +3,10 @@ import { isReplyAttribution } from "../shared/quote";
 const REPLY_QUOTES = '.gmail_quote, .yahoo_quoted, blockquote[type="cite"]';
 
 /** Fold only recognizable email history, preserving ordinary blockquotes and inline replies. */
-export function collapseEmailQuotes(document: Document): void {
+export function collapseEmailQuotes(
+  document: Document,
+  labels = { show: "Show quoted text", hide: "Hide quoted text" },
+): void {
   const body = document.body;
   const wrap = (range: Range) => {
     // A quote-only message must remain readable without opening a disclosure.
@@ -22,10 +25,10 @@ export function collapseEmailQuotes(document: Document): void {
     const summary = document.createElement("summary");
     const show = document.createElement("span");
     show.className = "mailroom-show-quote";
-    show.textContent = "Show quoted text";
+    show.textContent = labels.show;
     const hide = document.createElement("span");
     hide.className = "mailroom-hide-quote";
-    hide.textContent = "Hide quoted text";
+    hide.textContent = labels.hide;
     summary.append(show, hide);
     details.append(summary, range.extractContents());
     range.insertNode(details);

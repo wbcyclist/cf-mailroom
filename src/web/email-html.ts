@@ -83,7 +83,12 @@ export function inlineImageCandidates(html: string, attachments: Attachment[]): 
   return selectInlineImages(attachments.filter(item => item.content_id && contentIds.has(normalizeContentId(item.content_id))));
 }
 
-export function buildEmailHtmlDocument(html: string, attachments: Attachment[], imageSources: ReadonlyMap<number, string> = new Map()): string {
+export function buildEmailHtmlDocument(
+  html: string,
+  attachments: Attachment[],
+  imageSources: ReadonlyMap<number, string> = new Map(),
+  quoteLabels?: { show: string; hide: string },
+): string {
   const document = new DOMParser().parseFromString(html, "text/html");
   document.querySelectorAll(BLOCKED_ELEMENTS).forEach((element) => element.remove());
 
@@ -135,7 +140,7 @@ export function buildEmailHtmlDocument(html: string, attachments: Attachment[], 
     link.removeAttribute("download");
   }
 
-  collapseEmailQuotes(document);
+  collapseEmailQuotes(document, quoteLabels);
 
   const csp = document.createElement("meta");
   csp.httpEquiv = "Content-Security-Policy";

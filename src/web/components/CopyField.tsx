@@ -1,7 +1,9 @@
+import { useI18n } from "../LanguageProvider";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 
 export function CopyField(props: { label?: string; value: string; placeholder?: boolean }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     await navigator.clipboard.writeText(props.value);
@@ -21,7 +23,7 @@ export function CopyField(props: { label?: string; value: string; placeholder?: 
       </code>
       {!props.placeholder && (
         <Button variant="ghost" size="sm" className="h-7 shrink-0 px-2 text-xs" onClick={copy}>
-          {copied ? "Copied" : "Copy"}
+          {copied ? t("Copied") : t("Copy")}
         </Button>
       )}
     </div>

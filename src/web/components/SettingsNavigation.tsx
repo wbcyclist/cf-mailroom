@@ -1,3 +1,4 @@
+import { useI18n } from "../LanguageProvider";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +12,7 @@ export function SettingsHeader(props: {
   onOpenGeneral: () => void;
   onOpenInboxes: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <header className="shrink-0 border-b bg-background px-4 md:px-8">
       <div className="flex h-14 items-center gap-2">
@@ -19,18 +21,18 @@ export function SettingsHeader(props: {
           size="icon"
           onClick={props.onBack}
           className="-ml-1.5 lg:hidden"
-          aria-label="Back to inbox"
+          aria-label={t("Back to inbox")}
         >
           <ArrowLeftIcon className="h-5 w-5" />
         </Button>
-        <h1 className="text-[15px] font-semibold tracking-[-0.015em] text-foreground">Settings</h1>
+        <h1 className="text-[15px] font-semibold tracking-[-0.015em] text-foreground">{t("Settings")}</h1>
       </div>
-      <nav aria-label="Settings sections" className="-mb-px flex gap-5">
+      <nav aria-label={t("Settings sections")} className="-mb-px flex gap-5">
         <SettingsTab active={props.active === "general"} onClick={props.onOpenGeneral}>
-          General
+          {t("General")}
         </SettingsTab>
         <SettingsTab active={props.active === "inboxes"} onClick={props.onOpenInboxes}>
-          Inboxes
+          {t("Inboxes")}
         </SettingsTab>
       </nav>
     </header>

@@ -1,4 +1,5 @@
 import type { BrowserPushSubscription } from "../shared/types";
+import type { Locale } from "./i18n";
 
 export type BrowserNotificationPermission = NotificationPermission | "unsupported";
 
@@ -44,6 +45,7 @@ export async function getBrowserPushState(): Promise<BrowserPushState> {
 
 export async function createBrowserPushSubscription(
   vapidPublicKey: string,
+  locale: Locale,
 ): Promise<BrowserPushSubscription> {
   if (!supportsBrowserPush()) {
     throw new BrowserPushError("unsupported", "This browser does not support push notifications.");
@@ -58,7 +60,7 @@ export async function createBrowserPushSubscription(
   }
 
   try {
-    const registration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    const registration = await navigator.serviceWorker.register(`/sw.js?lang=${locale}`, { scope: "/" });
     await navigator.serviceWorker.ready;
     const applicationServerKey = base64urlToUint8Array(vapidPublicKey);
     let subscription = await registration.pushManager.getSubscription();
@@ -90,6 +92,22 @@ export async function createBrowserPushSubscription(
       "subscription-failed",
       error instanceof Error ? error.message : "Could not subscribe this browser.",
     );
+  }
+}
+
+/** The script URL preserves the notification language while the app is closed. */
+export async function updateBrowserPushLanguage(locale: Locale): Promise<void> {
+  if (!supportsBrowserPush()) return;
+  try {
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    const worker = registration?.installing ?? registration?.waiting ?? registration?.active;
+    if (!worker) return;
+    const url = new URL(worker.scriptURL);
+    if (url.pathname === "/sw.js" && url.searchParams.get("lang") !== locale) {
+      await navigator.serviceWorker.register(`/sw.js?lang=${locale}`, { scope: "/" });
+    }
+  } catch {
+    // Offline or blocked service workers must not prevent a UI language change.
   }
 }
 

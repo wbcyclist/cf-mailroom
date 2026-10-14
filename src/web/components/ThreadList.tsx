@@ -1,3 +1,4 @@
+import { useI18n } from "../LanguageProvider";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { SquarePen } from "lucide-react";
@@ -15,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { bulkUpdateThreads, type BulkThreadAction } from "../api";
-import { formatTime } from "../lib";
+import { formatDateTime, formatTime } from "../lib";
 import { EmailAvatar } from "./EmailAvatar";
 import {
   ArchiveIcon,
@@ -62,6 +63,7 @@ export function ThreadList(props: {
   onSelect: (id: number) => void;
   onMarkedUnread: (ids: number[]) => void;
 }) {
+  const { t } = useI18n();
   const searchRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
   const [checked, setChecked] = useState<ReadonlySet<number>>(new Set());
@@ -164,7 +166,7 @@ export function ThreadList(props: {
                   showFetching ? "animate-spin opacity-100" : "opacity-0"
                 }`}
               />
-              <span className="sr-only">{showFetching ? "Refreshing conversations" : ""}</span>
+              <span className="sr-only">{showFetching ? t("Refreshing conversations") : ""}</span>
             </span>
           </div>
           {props.selectedMailbox !== null && (
@@ -172,8 +174,8 @@ export function ThreadList(props: {
               variant="ghost"
               size="icon"
               onClick={() => props.onOpenMailboxSettings(props.selectedMailbox!)}
-              aria-label="Inbox settings"
-              title="Inbox settings"
+              aria-label={t("Inbox settings")}
+              title={t("Inbox settings")}
               className="-mr-1.5 hidden text-muted-foreground lg:inline-flex"
             >
               <SettingsIcon className="h-4 w-4" />
@@ -189,27 +191,28 @@ export function ThreadList(props: {
             >
               <SelectTrigger
                 className="-ml-2 h-8 min-w-0 max-w-[calc(100%-2.75rem)] border-transparent px-2 text-[15px] font-semibold shadow-none hover:bg-muted"
-                aria-label="Choose inbox"
+                aria-label={t("Choose inbox")}
               >
-                <SelectValue placeholder="All inboxes" />
+                <SelectValue placeholder={t("All inboxes")} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All inboxes</SelectItem>
+                <SelectItem value="all">{t("All inboxes")}</SelectItem>
                 {props.mailboxes.map((mailbox) => (
                   <SelectItem key={mailbox.id} value={String(mailbox.id)}>
                     {mailbox.address}
                   </SelectItem>
                 ))}
-                <SelectItem value="archive">Archive</SelectItem>
+                <SelectItem value="archive">{t("Archive")}
+                        </SelectItem>
               </SelectContent>
             </Select>
-            <Button variant="ghost" size="icon" onClick={props.onCompose} aria-label="Compose new message" title="Compose new message" className="shrink-0"><SquarePen className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" onClick={props.onCompose} aria-label={t("Compose new message")} title={t("Compose new message")} className="shrink-0"><SquarePen className="h-4 w-4" /></Button>
             <Button
               variant="ghost"
               size="icon"
               onClick={props.onOpenSettings}
-              aria-label="Open settings"
-              title="Settings"
+              aria-label={t("Open settings")}
+              title={t("Settings")}
               className="-mr-1.5 text-muted-foreground"
             >
               <SettingsIcon className="h-[18px] w-[18px]" />
@@ -231,8 +234,8 @@ export function ThreadList(props: {
                     event.currentTarget.blur();
                   }
                 }}
-                placeholder="Search conversations"
-                aria-label="Search conversations"
+                placeholder={t("Search conversations")}
+                aria-label={t("Search conversations")}
                 className="h-9 w-full bg-muted/50 pr-9 pl-8.5 text-[13px] focus-visible:bg-background"
               />
               {props.search ? (
@@ -241,7 +244,7 @@ export function ThreadList(props: {
                   size="icon-xs"
                   onClick={() => props.onSearch("")}
                   className="absolute top-1/2 right-1.5 -translate-y-1/2 text-muted-foreground"
-                  aria-label="Clear search"
+                  aria-label={t("Clear search")}
                 >
                   <XIcon className="h-3.5 w-3.5" />
                 </Button>
@@ -260,14 +263,14 @@ export function ThreadList(props: {
                     onCheckedChange={(value) =>
                       setChecked(value === true ? new Set(visibleThreads.map((t) => t.id)) : new Set())
                     }
-                    aria-label={allChecked ? "Deselect all conversations" : "Select all conversations"}
+                    aria-label={allChecked ? t("Deselect all conversations") : t("Select all conversations")}
                   />
                 </span>
               )}
               {selectionMode ? (
                 <>
                   <span className="text-[13px] font-medium tabular-nums text-foreground">
-                    {checkedCount} selected
+                    {t("{count} selected", { count: checkedCount })}
                   </span>
                   <span className="ml-auto flex items-center gap-0.5">
                     <Button
@@ -278,7 +281,7 @@ export function ThreadList(props: {
                         ids: [...checked], action: checkedAllRead ? "unread" : "read",
                       })}
                     >
-                      {checkedAllRead ? "Mark unread" : "Mark read"}
+                      {checkedAllRead ? t("Mark unread") : t("Mark read")}
                     </Button>
                     <Button
                       variant="ghost"
@@ -294,12 +297,12 @@ export function ThreadList(props: {
                       {checkedAllArchived ? (
                         <>
                           <InboxIcon className="h-3.5 w-3.5" />
-                          Move to inbox
+                          {t("Move to inbox")}
                         </>
                       ) : (
                         <>
                           <ArchiveIcon className="h-3.5 w-3.5" />
-                          Archive
+                          {t("Archive")}
                         </>
                       )}
                     </Button>
@@ -307,7 +310,7 @@ export function ThreadList(props: {
                       variant="ghost"
                       size="icon-sm"
                       onClick={() => setChecked(new Set())}
-                      aria-label="Clear selection"
+                      aria-label={t("Clear selection")}
                       className="text-muted-foreground"
                     >
                       <XIcon className="h-3.5 w-3.5" />
@@ -321,9 +324,9 @@ export function ThreadList(props: {
                     onValueChange={(value) => props.onFilter(value as ThreadFilter)}
                     className="gap-0"
                   >
-                    <TabsList aria-label="Conversation filter" className="h-7!">
-                      <FilterTab value="all" label="All" />
-                      <FilterTab value="unread" label="Unread" count={props.unreadCount ?? undefined} />
+                    <TabsList aria-label={t("Conversation filter")} className="h-7!">
+                      <FilterTab value="all" label={t("All")} />
+                      <FilterTab value="unread" label={t("Unread")} count={props.unreadCount ?? undefined} />
                     </TabsList>
                   </Tabs>
 
@@ -336,7 +339,7 @@ export function ThreadList(props: {
                     >
                       <SelectTrigger
                         size="sm"
-                        aria-label="Filter by label"
+                        aria-label={t("Filter by label")}
                         className={`ml-auto min-w-0 max-w-[45%] gap-1.5 text-xs ${
                           props.activeLabel !== null
                             ? "border-foreground/25 bg-accent text-foreground"
@@ -345,11 +348,11 @@ export function ThreadList(props: {
                       >
                         <TagIcon className="h-3.5 w-3.5" />
                         <span className="min-w-0 truncate">
-                          {props.activeLabel === null ? "Label" : <SelectValue placeholder="Label" />}
+                          {props.activeLabel === null ? t("Label") : <SelectValue placeholder={t("Label")} />}
                         </span>
                       </SelectTrigger>
                       <SelectContent align="end" position="popper">
-                        <SelectItem value="all">All labels</SelectItem>
+                        <SelectItem value="all">{t("All labels")}</SelectItem>
                         {availableLabels.map((label) => (
                           <SelectItem key={label.id} value={String(label.id)}>
                             {props.selectedMailbox === null
@@ -367,7 +370,7 @@ export function ThreadList(props: {
         )}
         {bulkUpdate.isError && (
           <p role="alert" className="mt-2 text-xs text-destructive">
-            Couldn’t update the selected conversations. Please try again.
+            {t("Couldn’t update the selected conversations. Please try again.")}
           </p>
         )}
       </header>
@@ -375,8 +378,8 @@ export function ThreadList(props: {
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         {props.emptyInbox && (
           <ListState
-            title="No conversations yet"
-            detail="Email sent to your inboxes will show up here."
+            title={t("No conversations yet")}
+            detail={t("Email sent to your inboxes will show up here.")}
           />
         )}
 
@@ -384,8 +387,8 @@ export function ThreadList(props: {
 
         {props.error && !props.loading && (
           <ListState
-            title="Couldn’t load conversations"
-            detail="Check your connection and try again."
+            title={t("Couldn’t load conversations")}
+            detail={t("Check your connection and try again.")}
           />
         )}
 
@@ -393,23 +396,23 @@ export function ThreadList(props: {
           <ListState
             title={
               props.search || props.activeLabel !== null
-                ? "No matching conversations"
+                ? t("No matching conversations")
                 : props.filter === "unread"
-                  ? "No unread conversations"
+                  ? t("No unread conversations")
                   : props.archive
-                    ? "Archive is empty"
-                    : "Inbox zero"
+                    ? t("Archive is empty")
+                    : t("Inbox zero")
             }
             detail={
               props.activeLabel !== null
-                ? "Try another label or choose All labels."
+                ? t("Try another label or choose All labels.")
                 : props.search
-                  ? "Try a name, subject, or message text."
+                  ? t("Try a name, subject, or message text.")
                   : props.filter === "unread"
                     ? undefined
                     : props.archive
-                      ? "Conversations you archive will appear here."
-                      : "Nothing needs your attention right now."
+                      ? t("Conversations you archive will appear here.")
+                      : t("Nothing needs your attention right now.")
             }
           />
         )}
@@ -437,7 +440,7 @@ export function ThreadList(props: {
               onClick={props.onLoadMore}
               disabled={props.loadingMore}
             >
-              {props.loadingMore ? "Loading…" : "Load older conversations"}
+              {props.loadingMore ? t("Loading…") : t("Load older conversations")}
             </Button>
           </div>
         )}
@@ -467,6 +470,7 @@ function ThreadRow(props: {
   onCheckedChange: (value: boolean) => void;
   onClick: () => void;
 }) {
+  const { t, locale, timeZone } = useI18n();
   const { thread } = props;
   const showArchivedBadge = props.showArchived && thread.status === "archived";
   const unread = !thread.is_read;
@@ -498,7 +502,7 @@ function ThreadRow(props: {
         aria-current={props.selected ? "true" : undefined}
         className="flex w-full min-w-0 gap-3 px-4 py-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:ring-inset"
       >
-        <span className="sr-only">{unread ? "Unread conversation. " : ""}</span>
+        <span className="sr-only">{unread ? t("Unread conversation. ") : ""}</span>
         <EmailAvatar
           email={thread.last_from_address}
           label={sender}
@@ -517,11 +521,12 @@ function ThreadRow(props: {
             </span>
             <time
               dateTime={thread.last_message_at}
+              title={formatDateTime(thread.last_message_at, locale, timeZone)}
               className={`shrink-0 text-xs tabular-nums ${
                 unread ? "font-medium text-foreground" : "text-muted-foreground"
               }`}
             >
-              {formatTime(thread.last_message_at)}
+              {formatTime(thread.last_message_at, locale, timeZone)}
             </time>
           </span>
           <span
@@ -529,7 +534,7 @@ function ThreadRow(props: {
               unread ? "font-medium text-foreground" : "text-foreground/75"
             }`}
           >
-            {thread.subject || "(no subject)"}
+            {thread.subject || t("(no subject)")}
           </span>
           <span className="mt-0.5 block truncate text-[12.5px] leading-5 text-muted-foreground">
             {thread.snippet}
@@ -543,7 +548,7 @@ function ThreadRow(props: {
                   className="h-5 shrink-0 gap-1 rounded-md px-1.5 text-[11px] font-normal text-muted-foreground"
                 >
                   <ArchiveIcon className="h-3 w-3" />
-                  Archived
+                  {t("Archived")}
                 </Badge>
               )}
               {thread.labels.map((label) => (
@@ -564,7 +569,7 @@ function ThreadRow(props: {
               {hasDraft && (
                 <span className="ml-auto inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
                   <SparklesIcon className="h-3 w-3" />
-                  Draft
+                  {t("Draft")}
                 </span>
               )}
             </span>
@@ -581,7 +586,7 @@ function ThreadRow(props: {
           id={checkboxId}
           checked={props.checked}
           onCheckedChange={(value) => props.onCheckedChange(value === true)}
-          aria-label={`Select conversation with ${sender}`}
+          aria-label={t("Select conversation with {sender}", { sender })}
         />
       </label>
     </div>
@@ -603,8 +608,9 @@ function ListState(props: { title: string; detail?: string }) {
 }
 
 function ThreadListSkeleton() {
+  const { t } = useI18n();
   return (
-    <div aria-label="Loading conversations" aria-busy="true">
+    <div aria-label={t("Loading conversations")} aria-busy="true">
       {[0, 1, 2, 3, 4].map((item) => (
         <div key={item} className="flex animate-pulse gap-3 border-b border-border/70 px-4 py-3.5">
           <span className="h-8 w-8 shrink-0 rounded-full bg-muted" />

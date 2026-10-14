@@ -1,3 +1,4 @@
+import { useI18n } from "../LanguageProvider";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,7 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
-import { formatTime, splitQuotedTail } from "../lib";
+import { formatDateTime, formatTime, splitQuotedTail } from "../lib";
 import { EmailAvatar } from "./EmailAvatar";
 import { EmailHtmlBody } from "./EmailHtmlBody";
 import {
@@ -42,6 +43,7 @@ export function ThreadView(props: {
   onBack: () => void;
   onMoved: () => void;
 }) {
+  const { t, errorMessage } = useI18n();
   const queryClient = useQueryClient();
   const [before, setBefore] = useState<number | null>(null);
   const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
@@ -215,7 +217,7 @@ export function ThreadView(props: {
             size="icon"
             onClick={props.onBack}
             className="-ml-1"
-            aria-label="Back to conversations"
+            aria-label={t("Back to conversations")}
           >
             <ArrowLeftIcon className="h-5 w-5" />
           </Button>
@@ -224,12 +226,12 @@ export function ThreadView(props: {
           <span className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
             <InboxIcon className="h-[18px] w-[18px]" />
           </span>
-          <p className="mt-3 text-[13px] font-medium text-foreground">Couldn’t open this conversation</p>
+          <p className="mt-3 text-[13px] font-medium text-foreground">{t("Couldn’t open this conversation")}</p>
           <p className="mt-1 text-[12.5px] text-muted-foreground">
-            It may have been archived or deleted, or the connection dropped.
+            {t("It may have been archived or deleted, or the connection dropped.")}
           </p>
           <Button variant="outline" onClick={() => detail.refetch()} className="mt-4">
-            Try again
+            {t("Try again")}
           </Button>
         </div>
       </div>
@@ -320,7 +322,7 @@ export function ThreadView(props: {
           size="icon"
           onClick={props.onBack}
           className="-ml-1 md:hidden"
-          aria-label="Back to conversations"
+          aria-label={t("Back to conversations")}
         >
           <ArrowLeftIcon className="h-5 w-5" />
         </Button>
@@ -329,13 +331,13 @@ export function ThreadView(props: {
             className="truncate text-[15px] font-semibold tracking-[-0.015em] text-foreground"
             title={thread.subject || undefined}
           >
-            {thread.subject || "(no subject)"}
+            {thread.subject || t("(no subject)")}
           </h1>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span className="truncate">{thread.mailbox_address}</span>
             <span aria-hidden="true">·</span>
             <span className="shrink-0 tabular-nums">
-              {thread.message_count} {thread.message_count === 1 ? "message" : "messages"}
+              {t(thread.message_count === 1 ? "{count} message" : "{count} messages", { count: thread.message_count })}
             </span>
             {thread.labels.length > 0 && (
               <span className="ml-1 hidden min-w-0 items-center gap-1 overflow-hidden sm:flex">
@@ -356,8 +358,8 @@ export function ThreadView(props: {
         <Button
           variant="outline"
           size="icon"
-          title="Mark unread"
-          aria-label="Mark conversation as unread"
+          title={t("Mark unread")}
+          aria-label={t("Mark conversation as unread")}
           disabled={markUnread.isPending || moveThread.isPending}
           onPointerDown={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
@@ -371,12 +373,12 @@ export function ThreadView(props: {
             variant="outline"
             onClick={() => moveThread.mutate("unarchive")}
             disabled={moveThread.isPending || markUnread.isPending}
-            aria-label="Move conversation to inbox"
+            aria-label={t("Move conversation to inbox")}
             className="shrink-0"
           >
             <InboxIcon className="h-4 w-4" />
             <span className="hidden sm:inline">
-              {moveThread.isPending ? "Moving…" : "Move to inbox"}
+              {moveThread.isPending ? t("Moving…") : t("Move to inbox")}
             </span>
           </Button>
         ) : (
@@ -384,12 +386,12 @@ export function ThreadView(props: {
             variant="outline"
             onClick={() => moveThread.mutate("archive")}
             disabled={moveThread.isPending || markUnread.isPending}
-            aria-label="Archive conversation"
+            aria-label={t("Archive conversation")}
             className="shrink-0"
           >
             <ArchiveIcon className="h-4 w-4" />
             <span className="hidden sm:inline">
-              {moveThread.isPending ? "Archiving…" : "Archive"}
+              {moveThread.isPending ? t("Archiving…") : t("Archive")}
             </span>
           </Button>
         )}
@@ -397,15 +399,15 @@ export function ThreadView(props: {
 
       {markUnread.isError && (
         <p role="alert" className="border-b bg-background px-4 py-2 text-sm text-destructive md:px-6">
-          Couldn’t mark this conversation as unread. Please try again.
+          {t("Couldn’t mark this conversation as unread. Please try again.")}
         </p>
       )}
 
       <div ref={conversationRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mr-auto w-full max-w-[800px] space-y-3 px-4 py-5 sm:px-6 md:py-6">
           <div className="flex gap-2">
-            {detail.data.next_before !== null && <Button variant="outline" size="sm" onClick={() => setBefore(detail.data.next_before)}>Older messages</Button>}
-            {before !== null && <Button variant="outline" size="sm" onClick={() => setBefore(null)}>Latest messages</Button>}
+            {detail.data.next_before !== null && <Button variant="outline" size="sm" onClick={() => setBefore(detail.data.next_before)}>{t("Older messages")}</Button>}
+            {before !== null && <Button variant="outline" size="sm" onClick={() => setBefore(null)}>{t("Latest messages")}</Button>}
           </div>
           {messages.map((message) => (
             <MessageCard key={message.id} message={message} />
@@ -418,7 +420,7 @@ export function ThreadView(props: {
           <Card className="gap-0 py-0 shadow-[0_1px_2px_oklch(0.2_0.012_265/0.04),0_4px_16px_-6px_oklch(0.2_0.012_265/0.08)] transition-shadow focus-within:ring-foreground/25">
             <div className="flex min-h-9 min-w-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border/70 py-1 pr-2 pl-3.5 text-xs text-muted-foreground">
               <span className="flex min-w-0 flex-1 basis-48 items-center gap-1.5 py-1">
-                <span className="shrink-0">Replying from</span>
+                <span className="shrink-0">{t("Replying from")}</span>
                 <span className="truncate font-medium text-foreground/80" title={thread.mailbox_address}>
                   {thread.mailbox_address}
                 </span>
@@ -456,19 +458,19 @@ export function ThreadView(props: {
               />
             )}
             <div className="px-3.5 pt-3 text-xs text-muted-foreground">
-              To: {replyTarget?.expected_recipients.join(", ") || "No reply target"}
+              {t("To: {recipients}", { recipients: replyTarget?.expected_recipients.join(", ") || t("No reply target") })}
             </div>
-            {before !== null && <p className="px-3.5 pt-2 text-xs">Open the latest messages before replying.</p>}
+            {before !== null && <p className="px-3.5 pt-2 text-xs">{t("Open the latest messages before replying.")}</p>}
             {targetChanged && before === null && detail.data.reply_target && (
               <div role="alert" className="px-3.5 pt-2 text-xs">
-                <p>The conversation changed. Review the latest message before replying to {detail.data.reply_target.expected_recipients.join(", ")}.</p>
+                <p>{t("The conversation changed. Review the latest message before replying to {recipients}.", { recipients: detail.data.reply_target.expected_recipients.join(", ") })}</p>
                 <Button variant="outline" size="sm" className="mt-2" disabled={composerBusy} onClick={() => {
                   setReplyTarget(detail.data.reply_target);
                   setUsedDraftId(null);
                   setUndoState(null);
                   attemptIds.current.clear();
                   reply.reset();
-                }}>Confirm reply target</Button>
+                }}>{t("Confirm reply target")}</Button>
               </div>
             )}
             <Textarea
@@ -488,18 +490,18 @@ export function ThreadView(props: {
                 addFiles(event.clipboardData.files);
               }}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229 && (event.metaKey || event.ctrlKey)) {
                   event.preventDefault();
                   submitReply();
                 }
               }}
-              placeholder="Write a reply…"
+              placeholder={t("Write a reply…")}
               rows={3}
-              aria-label="Reply"
+              aria-label={t("Reply")}
               className="max-h-[min(30dvh,200px)] min-h-[84px] resize-none overflow-y-auto overscroll-contain rounded-none border-0 bg-transparent px-3.5 py-3 text-sm leading-6 shadow-none transition-opacity duration-300 ease-out focus-visible:ring-0 disabled:bg-transparent aria-busy:opacity-40 md:text-sm"
             />
             {pendingFiles.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 px-3.5 pb-1" aria-label="Attachments to send">
+              <div className="flex flex-wrap gap-1.5 px-3.5 pb-1" aria-label={t("Attachments to send")}>
                 {pendingFiles.map((file, index) => (
                   <span
                     key={`${file.name}-${index}`}
@@ -512,7 +514,7 @@ export function ThreadView(props: {
                     </span>
                     <button
                       type="button"
-                      aria-label={`Remove ${file.name}`}
+                      aria-label={t("Remove {name}", { name: file.name })}
                       className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                       onClick={() =>
                         setPendingFiles((current) =>
@@ -530,7 +532,7 @@ export function ThreadView(props: {
               <span className="hidden items-center gap-1 text-xs text-muted-foreground sm:inline-flex">
                 <Kbd>{isMac ? "⌘" : "Ctrl"}</Kbd>
                 <Kbd>Enter</Kbd>
-                <span className="ml-0.5">to send</span>
+                <span className="ml-0.5">{t("to send")}</span>
               </span>
               <div className="flex items-center gap-1.5">
                 <input
@@ -544,8 +546,8 @@ export function ThreadView(props: {
                   variant="ghost"
                   size="icon"
                   className="text-muted-foreground"
-                  aria-label="Attach files"
-                  title="Attach files"
+                  aria-label={t("Attach files")}
+                  title={t("Attach files")}
                   disabled={reply.isPending}
                   onClick={() => fileInputRef.current?.click()}
                 >
@@ -556,14 +558,14 @@ export function ThreadView(props: {
                   disabled={(!replyText.trim() && pendingFiles.length === 0) || composerBusy || !replyTarget || targetChanged}
                 >
                   <SendIcon className="h-3.5 w-3.5" />
-                  {reply.isPending ? "Sending…" : "Send reply"}
+                  {reply.isPending ? t("Sending…") : t("Send reply")}
                 </Button>
               </div>
             </div>
           </Card>
           {discard.isError && (
             <p role="alert" className="mt-2 text-xs leading-5 text-destructive">
-              Couldn’t discard the AI draft. Your text is still here. Try again.
+              {t("Couldn’t discard the AI draft. Your text is still here. Try again.")}
             </p>
           )}
           {reply.isError && (
@@ -572,8 +574,8 @@ export function ThreadView(props: {
               className="mt-2 flex items-center gap-3 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive"
             >
               <p className="min-w-0 flex-1">
-                {reply.error instanceof Error ? reply.error.message : "The reply could not be sent."}
-                {" "}Your text is still here. Check Email Logs before creating a new send attempt.
+                {reply.error instanceof Error ? errorMessage(reply.error.message) : t("The reply could not be sent.")}
+                {" "}{t("Your text is still here. Check Email Logs before creating a new send attempt.")}
               </p>
               {failedAttemptKey && (
                 <Button
@@ -586,7 +588,7 @@ export function ThreadView(props: {
                     reply.reset();
                   }}
                 >
-                  New attempt
+                  {t("New attempt")}
                 </Button>
               )}
             </div>
@@ -596,7 +598,7 @@ export function ThreadView(props: {
               role="status"
               className="mt-2 rounded-lg border bg-background px-3 py-2 text-xs leading-5 text-muted-foreground"
             >
-              {sendNotice}
+              {errorMessage(sendNotice)}
             </div>
           )}
         </div>
@@ -606,6 +608,7 @@ export function ThreadView(props: {
 }
 
 function MessageCard({ message }: { message: Message }) {
+  const { t, locale, timeZone } = useI18n();
   const [expanded, setExpanded] = useState(false);
   const body = useQuery({
     queryKey: ["message-body", message.id], queryFn: () => fetchMessageBody(message.id),
@@ -633,26 +636,26 @@ function MessageCard({ message }: { message: Message }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[13.5px] font-semibold text-foreground">{displayName}</span>
-            {message.sent_by === "agent" && <AuthorBadge tone="agent">Agent</AuthorBadge>}
-            {isOutbound && message.sent_by === "human" && <AuthorBadge tone="human">You</AuthorBadge>}
+            {message.sent_by === "agent" && <AuthorBadge tone="agent">{t("Agent")}</AuthorBadge>}
+            {isOutbound && message.sent_by === "human" && <AuthorBadge tone="human">{t("You")}</AuthorBadge>}
           </div>
           <div className="mt-0.5 truncate text-xs text-muted-foreground">
-            {isOutbound ? `to ${JSON.parse(message.to_addresses || "[]").join(", ")}` : message.from_address}
+            {isOutbound ? t("to {recipients}", { recipients: JSON.parse(message.to_addresses || "[]").join(", ") }) : message.from_address}
           </div>
         </div>
         <time
           dateTime={message.created_at}
           className="mt-0.5 shrink-0 text-xs tabular-nums text-muted-foreground"
-          title={new Date(message.created_at).toLocaleString()}
+          title={formatDateTime(message.created_at, locale, timeZone)}
         >
-          {formatTime(message.created_at)}
+          {formatTime(message.created_at, locale, timeZone)}
         </time>
       </div>
 
-      {message.has_full_body && !expanded && <Button variant="outline" size="sm" className="mb-3" onClick={() => setExpanded(true)}>Show full message</Button>}
-      {body.isLoading && <p className="text-xs">Loading message…</p>}
-      {body.isError && <Button variant="outline" size="sm" onClick={() => body.refetch()}>Retry loading message</Button>}
-      {body.data?.truncated && <p className="mb-3 text-xs">This message is too large to display in full. {body.data.downloadable && <a className="underline" href={`/api/messages/${message.id}/download`}>Download original email</a>}</p>}
+      {message.has_full_body && !expanded && <Button variant="outline" size="sm" className="mb-3" onClick={() => setExpanded(true)}>{t("Show full message")}</Button>}
+      {body.isLoading && <p className="text-xs">{t("Loading message…")}</p>}
+      {body.isError && <Button variant="outline" size="sm" onClick={() => body.refetch()}>{t("Retry loading message")}</Button>}
+      {body.data?.truncated && <p className="mb-3 text-xs">{t("This message is too large to display in full.")}{body.data.downloadable && <a className="underline" href={`/api/messages/${message.id}/download`}>{t("Download original email")}</a>}</p>}
       {html ? (
         <EmailHtmlBody
           html={html}
@@ -665,7 +668,7 @@ function MessageCard({ message }: { message: Message }) {
         </div>
       )}
       {message.attachments.length > 0 && (
-        <div className="mt-4 flex flex-wrap gap-2" aria-label="Attachments">
+        <div className="mt-4 flex flex-wrap gap-2" aria-label={t("Attachments")}>
           {message.attachments.map((attachment) => (
             <a
               key={attachment.id}
@@ -674,7 +677,7 @@ function MessageCard({ message }: { message: Message }) {
               className="inline-flex max-w-full items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             >
               <PaperclipIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 truncate">{attachment.filename || "Attachment"}</span>
+              <span className="min-w-0 truncate">{attachment.filename || t("Attachment")}</span>
               <span className="shrink-0 text-muted-foreground">{formatFileSize(attachment.size)}</span>
             </a>
           ))}
@@ -689,7 +692,7 @@ function MessageCard({ message }: { message: Message }) {
             aria-expanded={showQuoted}
             className="-ml-2 text-muted-foreground"
           >
-            {showQuoted ? "Hide quoted text" : "Show quoted text"}
+            {showQuoted ? t("Hide quoted text") : t("Show quoted text")}
           </Button>
           {showQuoted && (
             <div className="mt-2 break-words border-l border-border pl-3 text-[13px] leading-relaxed whitespace-pre-wrap text-muted-foreground">
@@ -717,6 +720,7 @@ function DraftAssist(props: {
   onInstruct: () => void;
   onUndo: () => void;
 }) {
+  const { t, errorMessage } = useI18n();
   const action = (
     label: string,
     onClick: () => void,
@@ -741,7 +745,7 @@ function DraftAssist(props: {
 
   if (props.draft) {
     const context = [
-      props.draft.playbook_name ? `Playbook: ${props.draft.playbook_name}` : null,
+      props.draft.playbook_name ? t("Playbook: {name}", { name: props.draft.playbook_name }) : null,
       props.draft.agent_notes,
     ]
       .filter(Boolean)
@@ -751,17 +755,17 @@ function DraftAssist(props: {
         <span role="status" className="flex min-w-0 items-center gap-1.5" title={context || undefined}>
           <SparklesIcon className="h-3 w-3 shrink-0 text-foreground/70" />
           <span className="shrink-0 font-medium text-foreground/80">
-            {props.usingDraft ? "AI draft" : "New AI draft"}
+            {props.usingDraft ? t("AI draft") : t("New AI draft")}
           </span>
           {props.usingDraft && props.draft.playbook_name && (
             <span className="min-w-0 truncate">· {props.draft.playbook_name}</span>
           )}
         </span>
         <span className="flex shrink-0 items-center gap-1">
-          {props.canUndo && action("Undo", props.onUndo, "Restore the reply from before this rewrite")}
-          {!props.usingDraft && action("Replace", props.onUse, "Replace reply with AI draft")}
-          {reviseAction("Revise", "Tell AI how to change this reply")}
-          {action(props.busy ? "Discarding…" : "Discard", props.onDiscard, "Discard AI draft and clear reply")}
+          {props.canUndo && action(t("Undo"), props.onUndo, t("Restore the reply from before this rewrite"))}
+          {!props.usingDraft && action(t("Replace"), props.onUse, t("Replace reply with AI draft"))}
+          {reviseAction(t("Revise"), t("Tell AI how to change this reply"))}
+          {action(props.busy ? t("Discarding…") : t("Discard"), props.onDiscard, t("Discard AI draft and clear reply"))}
         </span>
       </span>
     );
@@ -771,7 +775,7 @@ function DraftAssist(props: {
     return (
       <span role="status" className="flex shrink-0 items-center gap-1.5 px-1.5">
         <SparklesIcon className="h-3 w-3 animate-pulse" />
-        Drafting…
+        {t("Drafting…")}
       </span>
     );
   }
@@ -780,11 +784,11 @@ function DraftAssist(props: {
 
   return (
     <span className="flex shrink-0 items-center gap-2.5">
-      {props.status === "deferred" && <span title={props.error ?? undefined}>AI paused until the usage limit resets</span>}
+      {props.status === "deferred" && <span title={props.error ? errorMessage(props.error) : undefined}>{t("AI paused until the usage limit resets")}</span>}
       {props.status === "failed" && (
-        <span title={props.error ?? undefined}>Automatic draft failed</span>
+        <span title={props.error ? errorMessage(props.error) : undefined}>{t("Automatic draft failed")}</span>
       )}
-      {reviseAction("Draft with AI", "Ask AI to draft a reply, optionally with an instruction")}
+      {reviseAction(t("Draft with AI"), t("Ask AI to draft a reply, optionally with an instruction"))}
     </span>
   );
 }
@@ -800,7 +804,8 @@ function InstructionBar(props: {
   onSubmit: () => void;
   onClose: () => void;
 }) {
-  const verb = props.hasReply ? "Rewrite" : "Draft";
+  const { t, errorMessage } = useI18n();
+  const verb = props.hasReply ? t("Rewrite") : t("Draft");
   return (
     <div className="border-b border-border/70 bg-muted/35">
       <form
@@ -826,12 +831,12 @@ function InstructionBar(props: {
           }}
           disabled={props.pending || props.disabled}
           maxLength={2000}
-          aria-label="Instruction for the AI draft"
+          aria-label={t("Instruction for the AI draft")}
           aria-invalid={props.error ? true : undefined}
           placeholder={
             props.hasReply
-              ? "How should AI change this reply? e.g. shorter, firmer on the refund"
-              : "Optional: tell AI what to write, e.g. decline politely"
+              ? t("How should AI change this reply? e.g. shorter, firmer on the refund")
+              : t("Optional: tell AI what to write, e.g. decline politely")
           }
           className="h-8 min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground disabled:opacity-60"
         />
@@ -843,7 +848,7 @@ function InstructionBar(props: {
           disabled={props.pending || props.disabled}
         >
           {props.pending && <SparklesIcon className="animate-pulse" />}
-          {props.pending ? `${verb === "Rewrite" ? "Rewriting" : "Drafting"}…` : verb}
+          {props.pending ? (props.hasReply ? t("Rewriting…") : t("Drafting…")) : verb}
           {!props.pending && (
             <span className="hidden sm:contents">
               <Kbd>↵</Kbd>
@@ -855,8 +860,8 @@ function InstructionBar(props: {
           variant="ghost"
           size="icon-xs"
           className="shrink-0 text-muted-foreground"
-          aria-label="Close AI instruction"
-          title="Close (Esc)"
+          aria-label={t("Close AI instruction")}
+          title={t("Close (Esc)")}
           disabled={props.pending}
           onClick={props.onClose}
         >
@@ -865,7 +870,7 @@ function InstructionBar(props: {
       </form>
       {props.error && (
         <p role="alert" className="px-3.5 pb-2 text-xs leading-5 text-destructive">
-          {props.error} Your reply is unchanged.
+          {errorMessage(props.error)} {t("Your reply is unchanged.")}
         </p>
       )}
     </div>
@@ -900,15 +905,16 @@ function AuthorBadge(props: { tone: "agent" | "human"; children: React.ReactNode
 }
 
 function ThreadViewSkeleton({ onBack }: { onBack: () => void }) {
+  const { t } = useI18n();
   return (
-    <div className="flex h-full flex-col bg-canvas" aria-busy="true" aria-label="Loading conversation">
+    <div className="flex h-full flex-col bg-canvas" aria-busy="true" aria-label={t("Loading conversation")}>
       <div className="flex h-16 items-center gap-3 border-b bg-background px-4 md:px-6">
         <Button
           variant="ghost"
           size="icon"
           onClick={onBack}
           className="-ml-1 md:hidden"
-          aria-label="Back to conversations"
+          aria-label={t("Back to conversations")}
         >
           <ArrowLeftIcon className="h-5 w-5" />
         </Button>

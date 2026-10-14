@@ -1,6 +1,10 @@
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
 
+const chinese = new URL(self.location.href).searchParams.get("lang") === "zh-CN";
+const defaultTitle = chinese ? "新邮件" : "New email";
+const defaultBody = chinese ? "收到新会话。" : "A new conversation arrived.";
+
 self.addEventListener("push", (event) => {
   if (!event.data) return;
 
@@ -8,12 +12,19 @@ self.addEventListener("push", (event) => {
   try {
     payload = event.data.json();
   } catch {
-    payload = { title: "New email", body: "A new conversation arrived." };
+    payload = {};
+  }
+
+  let title = payload.title || defaultTitle;
+  let body = payload.body || defaultBody;
+  if (chinese && payload.data && Object.hasOwn(payload.data, "sender")) {
+    title = `来自 ${payload.data.sender || "未知发件人"} 的新邮件`;
+    if (payload.data.hasSubject === false) body = "（无主题）";
   }
 
   event.waitUntil(
-    self.registration.showNotification(payload.title || "New email", {
-      body: payload.body || "A new conversation arrived.",
+    self.registration.showNotification(title, {
+      body,
       tag: payload.tag,
       renotify: Boolean(payload.tag),
       data: payload.data || { url: "/inbox" },

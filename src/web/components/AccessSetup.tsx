@@ -1,3 +1,4 @@
+import { useI18n, Trans } from "../LanguageProvider";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import type { ApiError } from "../api";
@@ -7,6 +8,7 @@ import { DashLink } from "./DashLink";
 
 /** Shown instead of the workspace until Cloudflare Access protects this Worker. */
 export function AccessSetup(props: { error: ApiError; onRetry: () => void; retrying: boolean }) {
+  const { t } = useI18n();
   const { code, hint } = props.error;
   // Access adds a signed assertion to every request it lets through; a hint
   // means the visitor already signed in, so only the variables are left.
@@ -17,38 +19,38 @@ export function AccessSetup(props: { error: ApiError; onRetry: () => void; retry
   return (
     <div className="flex h-dvh min-h-[560px] justify-center overflow-y-auto bg-canvas px-4 py-10 text-foreground md:py-16">
       <div className="w-full max-w-[620px]">
-        <h1 className="text-[20px] font-semibold tracking-tight">Finish securing Mailroom</h1>
+        <h1 className="text-[20px] font-semibold tracking-tight">{t("Finish securing Mailroom")}</h1>
         <p className="mt-2 max-w-xl text-[13.5px] leading-6 text-muted-foreground">
-          Mail stays locked until Cloudflare Access protects this Worker.
+          {t("Mail stays locked until Cloudflare Access protects this Worker.")}
         </p>
 
         <ol className="mt-8 space-y-3">
-          <Step n={1} title="Enable Access" state={accessActive ? "done" : "current"}>
+          <Step n={1} title={t("Enable Access")} state={accessActive ? "done" : "current"}>
             <p>
-              In the{" "}
-              <DashLink href={workerDashboardUrl("access")}>
-                {workerName ? `${workerName} Worker's Access tab` : "Worker's Access tab"}
-              </DashLink>
-              , select <strong>Enable access</strong> with the <strong>Cloudflare account</strong>{" "}
-              policy. Then reload this page.
+              <Trans message="In {link}, select Enable access with the Cloudflare account policy. Then reload this page." values={{
+                link: <DashLink href={workerDashboardUrl("access")}>
+                  {workerName ? t("{name} Worker's Access tab", { name: workerName }) : t("Worker's Access tab")}
+                </DashLink>,
+              }} />
             </p>
           </Step>
 
-          <Step n={2} title="Add two variables" state={accessActive ? "current" : "todo"}>
+          <Step n={2} title={t("Add two variables")} state={accessActive ? "current" : "todo"}>
             <p>
-              {mismatch ? "These values don't match your Access app. Update them" : "Add these"} in{" "}
-              <DashLink href={workerDashboardUrl("settings")}>Settings</DashLink> → Variables and
-              Secrets:
+              <Trans message={mismatch
+                ? "These values do not match your Access app. Update them in {link} → Variables and Secrets:"
+                : "Add these in {link} → Variables and Secrets:"}
+                values={{ link: <DashLink href={workerDashboardUrl("settings")}>{t("Settings")}</DashLink> }} />
             </p>
             <div className="mt-3 space-y-2">
               <CopyField
                 label="WEB_ACCESS_TEAM_DOMAIN"
-                value={hint?.team_domain ?? "Shown after step 1"}
+                value={hint?.team_domain ?? t("Shown after step 1")}
                 placeholder={!hint}
               />
               <CopyField
                 label="WEB_ACCESS_AUD"
-                value={hint?.aud ?? "Shown after step 1"}
+                value={hint?.aud ?? t("Shown after step 1")}
                 placeholder={!hint}
               />
             </div>
@@ -56,7 +58,7 @@ export function AccessSetup(props: { error: ApiError; onRetry: () => void; retry
         </ol>
 
         <Button className="mt-6" onClick={props.onRetry} disabled={props.retrying}>
-          {props.retrying ? "Checking…" : "Check again"}
+          {props.retrying ? t("Checking…") : t("Check again")}
         </Button>
       </div>
     </div>

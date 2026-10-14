@@ -19,22 +19,22 @@ export interface NewEmailNotificationPayload {
   title: string;
   body: string;
   tag: string;
-  data: { url: string };
+  data: { url: string; sender: string | null; hasSubject: boolean };
 }
 
 export function buildNewEmailNotification(
   input: NewEmailNotificationInput,
 ): NewEmailNotificationPayload {
-  const sender = (input.senderName?.trim() || input.senderAddress.trim() || "Unknown sender")
+  const sender = (input.senderName?.trim() || input.senderAddress.trim())
     .replace(/\s+/g, " ")
     .slice(0, 80);
   const subject = input.subject.trim().replace(/\s+/g, " ").slice(0, 160);
 
   return {
-    title: `New email from ${sender}`,
+    title: `New email from ${sender || "Unknown sender"}`,
     body: subject || "(no subject)",
     tag: `conversation-${input.threadId}`,
-    data: { url: `/inbox/${input.threadId}` },
+    data: { url: `/inbox/${input.threadId}`, sender: sender || null, hasSubject: Boolean(subject) },
   };
 }
 

@@ -15,16 +15,25 @@ export function initialOf(nameOrAddress: string): string {
   return (nameOrAddress.trim()[0] ?? "?").toUpperCase();
 }
 
-export function formatTime(iso: string): string {
+export function formatTime(iso: string, locale = "en", timeZone?: string, now = new Date()): string {
   const date = new Date(iso);
-  const now = new Date();
-  if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const calendar = new Intl.DateTimeFormat("en", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
+  const messageDay = calendar.formatToParts(date);
+  const currentDay = calendar.formatToParts(now);
+  const samePart = (type: Intl.DateTimeFormatPartTypes) =>
+    messageDay.find((part) => part.type === type)?.value === currentDay.find((part) => part.type === type)?.value;
+  const sameYear = samePart("year");
+  if (sameYear && samePart("month") && samePart("day")) {
+    return date.toLocaleTimeString(locale, { timeZone, hour: "2-digit", minute: "2-digit" });
   }
-  if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (sameYear) {
+    return date.toLocaleDateString(locale, { timeZone, month: "short", day: "numeric" });
   }
-  return date.toLocaleDateString([], { year: "numeric", month: "short", day: "numeric" });
+  return date.toLocaleDateString(locale, { timeZone, year: "numeric", month: "short", day: "numeric" });
 }
 
-export { splitQuotedTail } from "../shared/quote";
+export function formatDateTime(iso: string, locale = "en", timeZone?: string): string {
+  return new Date(iso).toLocaleString(locale, { timeZone, timeZoneName: "short" });
+}
+
+export { splitQuotedTail } from "../shared/quote.ts";

@@ -1,3 +1,4 @@
+import { useI18n, Trans } from "./LanguageProvider";
 import { useDeferredValue, useEffect, useRef } from "react";
 import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import {
@@ -69,6 +70,7 @@ function Workspace(props: {
   mailboxScoped?: boolean;
   settingsSection?: SettingsSection;
 }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const openCompose = useCompose();
   const location = useLocation();
@@ -216,11 +218,11 @@ function Workspace(props: {
   };
 
   const selectedMailboxName = isArchive
-    ? "Archive"
+    ? t("Archive")
     : selectedMailbox === null
-      ? "All inboxes"
+      ? t("All inboxes")
       : (mailboxes.data?.find((mailbox) => mailbox.id === selectedMailbox)?.address ??
-        "Inbox");
+        t("Inbox"));
   const scopeUnread = (mailboxes.data ?? [])
     .filter((mailbox) => selectedMailbox === null || mailbox.id === selectedMailbox)
     .reduce((sum, mailbox) => sum + mailbox.unread_count, 0);
@@ -345,24 +347,23 @@ function Workspace(props: {
 }
 
 function EmptyReadingPane(props: { empty: boolean }) {
+  const { t } = useI18n();
   return (
     <div className="flex h-full flex-col items-center justify-center bg-canvas px-6 pb-16 text-center">
       <span className="flex h-11 w-11 items-center justify-center rounded-full border bg-background text-muted-foreground">
         <InboxIcon className="h-5 w-5" />
       </span>
       <p className="mt-3 text-[13px] font-medium text-foreground">
-        {props.empty ? "Nothing here yet" : "No conversation selected"}
+        {props.empty ? t("Nothing here yet") : t("No conversation selected")}
       </p>
       <p className="mt-1 max-w-64 text-[12.5px] leading-5 text-muted-foreground">
         {props.empty ? (
-          "New email sent to your inboxes will appear in the list."
+          t("New email sent to your inboxes will appear in the list.")
         ) : (
           <>
-            Choose one from the list, or press{" "}
-            <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border bg-background px-1 align-[1px] font-sans text-[11px] font-medium">
-              /
-            </kbd>{" "}
-            to search.
+            <Trans message="Choose one from the list, or press {key} to search." values={{
+              key: <kbd className="inline-flex h-5 min-w-5 items-center justify-center rounded border bg-background px-1 align-[1px] font-sans text-[11px] font-medium">/</kbd>,
+            }} />
           </>
         )}
       </p>

@@ -1,3 +1,4 @@
+import { useI18n, Trans } from "../LanguageProvider";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Label, Mailbox, Playbook } from "../../shared/types";
@@ -100,6 +101,7 @@ export function AgentSettings(props: {
   onOpenGeneral: () => void;
   onBack: () => void;
 }) {
+  const { t, errorMessage } = useI18n();
   const queryClient = useQueryClient();
   const [baseInstructions, setBaseInstructions] = useState("");
   const [editor, setEditor] = useState<PlaybookEditorState | null>(null);
@@ -306,7 +308,7 @@ export function AgentSettings(props: {
   const prepareInbox = () => {
     const parsed = parseInboxAddress(mailboxAddress);
     if (!parsed) {
-      setMailboxValidationError("Enter a valid email address");
+      setMailboxValidationError(t("Enter a valid email address"));
       return;
     }
     setMailboxValidationError(null);
@@ -347,8 +349,8 @@ export function AgentSettings(props: {
           </div>
           <Button variant="outline" className="h-9 self-start sm:self-auto" onClick={openMailboxEditor}>
             <PlusIcon className="h-4 w-4" />
-            Add inbox
-          </Button>
+            {t("Add inbox")}
+              </Button>
         </div>
 
         {mailbox ? (
@@ -356,20 +358,20 @@ export function AgentSettings(props: {
             {!mailbox.has_received && (
               <SettingsBlock
                 id="email-routing-heading"
-                title="Email routing"
-                description="No mail has arrived yet. Make sure Email Routing sends this address to Mailroom, then send a test email."
+                title={t("Email routing")}
+                description={t("No mail has arrived yet. Make sure Email Routing sends this address to Mailroom, then send a test email.")}
               >
                 <Button
                   variant="link"
                   className="h-auto p-0 underline decoration-muted-foreground/50 hover:decoration-current"
                   onClick={() => setRoutingAddress(mailbox.address)}
                 >
-                  View setup steps
+                  {t("View setup steps")}
                 </Button>
               </SettingsBlock>
             )}
 
-            <SettingsBlock id="agent-drafting-heading" title="AI drafting">
+            <SettingsBlock id="agent-drafting-heading" title={t("AI drafting")}>
               <SettingsPanel>
                 <div className="flex items-start gap-4 px-4 py-4 sm:px-5">
                   <div className="min-w-0 flex-1">
@@ -377,14 +379,14 @@ export function AgentSettings(props: {
                       htmlFor="agent-drafting"
                       className="text-[13.5px] font-medium text-foreground"
                     >
-                      Draft replies to new messages
+                      {t("Draft replies to new messages")}
                     </label>
                     <p className="mt-1 max-w-xl text-[13px] leading-5 text-muted-foreground">
-                      Create a draft for new customer messages. Nothing is sent without your approval.
+                      {t("Create a draft for new customer messages. Nothing is sent without your approval.")}
                     </p>
                     {toggleDrafting.isError && (
                       <p className="mt-2 text-xs text-destructive" role="alert">
-                        Couldn’t update AI drafting. Try again.
+                        {t("Couldn’t update AI drafting. Try again.")}
                       </p>
                     )}
                   </div>
@@ -401,7 +403,7 @@ export function AgentSettings(props: {
                     className="mt-0.5"
                   />
                   <span id="agent-drafting-description" className="sr-only">
-                    When enabled, the AI creates drafts that require your review before sending.
+                    {t("When enabled, the AI creates drafts that require your review before sending.")}
                   </span>
                 </div>
               </SettingsPanel>
@@ -409,8 +411,8 @@ export function AgentSettings(props: {
 
             <SettingsBlock
               id="base-instructions-heading"
-              title="Base Instructions"
-              description="Product context and guidance applied to every agent draft for this inbox."
+              title={t("Base Instructions")}
+              description={t("Product context and guidance applied to every agent draft for this inbox.")}
             >
               <SettingsPanel className="transition-shadow focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/30">
                 <Textarea
@@ -418,17 +420,17 @@ export function AgentSettings(props: {
                   onChange={(event) => setBaseInstructions(event.target.value)}
                   rows={4}
                   aria-labelledby="base-instructions-heading"
-                  placeholder="Describe the product, the agent's role, voice, general rules, and signature…"
+                  placeholder={t("Describe the product, the agent's role, voice, general rules, and signature…")}
                   className="max-h-[60dvh] min-h-32 resize-y rounded-none border-0 bg-transparent px-4 py-3.5 text-sm leading-6 shadow-none focus-visible:ring-0 sm:px-5 md:text-sm"
                 />
                 <div className="flex items-center justify-between gap-3 border-t bg-muted/30 px-4 py-2.5 sm:px-5">
                   <p className="min-w-0 text-xs text-muted-foreground" aria-live="polite">
                     {saveInstructions.isError ? (
-                      <span className="text-destructive">Couldn’t save these instructions. Try again.</span>
+                      <span className="text-destructive">{t("Couldn’t save these instructions. Try again.")}</span>
                     ) : instructionsDirty ? (
-                      "Unsaved changes"
+                      t("Unsaved changes")
                     ) : saveInstructions.isSuccess ? (
-                      "All changes saved"
+                      t("All changes saved")
                     ) : null}
                   </p>
                   <Button
@@ -436,7 +438,7 @@ export function AgentSettings(props: {
                     onClick={() => saveInstructions.mutate()}
                     disabled={saveInstructions.isPending || !instructionsDirty}
                   >
-                    {saveInstructions.isPending ? "Saving…" : "Save instructions"}
+                    {saveInstructions.isPending ? t("Saving…") : t("Save instructions")}
                   </Button>
                 </div>
               </SettingsPanel>
@@ -444,20 +446,20 @@ export function AgentSettings(props: {
 
             <SettingsBlock
               id="labels-heading"
-              title="Labels"
-              description="New conversations are automatically tagged with every label whose condition matches. Replies are not labeled."
+              title={t("Labels")}
+              description={t("New conversations are automatically tagged with every label whose condition matches. Replies are not labeled.")}
               action={
                 <Button variant="outline" size="sm" onClick={() => openLabelEditor()}>
                   <PlusIcon className="h-3.5 w-3.5" />
-                  New label
+                  {t("New label")}
                 </Button>
               }
             >
               <SettingsPanel>
                 {labels.isLoading && <ListSkeleton />}
-                {labels.isError && <ListMessage tone="error">Couldn’t load labels.</ListMessage>}
+                {labels.isError && <ListMessage tone="error">{t("Couldn’t load labels.")}</ListMessage>}
                 {labels.data?.length === 0 && (
-                  <ListMessage icon={<TagIcon className="h-4 w-4" />}>No labels yet</ListMessage>
+                  <ListMessage icon={<TagIcon className="h-4 w-4" />}>{t("No labels yet")}</ListMessage>
                 )}
                 {labels.data && labels.data.length > 0 && (
                   <ul className="divide-y">
@@ -480,24 +482,24 @@ export function AgentSettings(props: {
 
             <SettingsBlock
               id="playbooks-heading"
-              title="Playbooks"
+              title={t("Playbooks")}
               description={
                 playbooks.data?.length
-                  ? `${activePlaybookCount} of ${playbooks.data.length} active. A matching playbook is combined with Base Instructions.`
-                  : "Guidance for specific support scenarios, combined with Base Instructions when a conversation matches."
+                  ? t("{active} of {total} active. A matching playbook is combined with Base Instructions.", { active: activePlaybookCount, total: playbooks.data.length })
+                  : t("Guidance for specific support scenarios, combined with Base Instructions when a conversation matches.")
               }
               action={
                 <Button variant="outline" size="sm" onClick={() => openEditor()}>
                   <PlusIcon className="h-3.5 w-3.5" />
-                  New playbook
+                  {t("New playbook")}
                 </Button>
               }
             >
               <SettingsPanel>
                 {playbooks.isLoading && <ListSkeleton />}
-                {playbooks.isError && <ListMessage tone="error">Couldn’t load playbooks.</ListMessage>}
+                {playbooks.isError && <ListMessage tone="error">{t("Couldn’t load playbooks.")}</ListMessage>}
                 {playbooks.data?.length === 0 && (
-                  <ListMessage icon={<SparklesIcon className="h-4 w-4" />}>No playbooks yet</ListMessage>
+                  <ListMessage icon={<SparklesIcon className="h-4 w-4" />}>{t("No playbooks yet")}</ListMessage>
                 )}
                 {playbooks.data && playbooks.data.length > 0 && (
                   <ul className="divide-y">
@@ -520,13 +522,14 @@ export function AgentSettings(props: {
               </SettingsPanel>
             </SettingsBlock>
 
-            <SettingsBlock id="danger-zone-heading" title="Danger zone">
+            <SettingsBlock id="danger-zone-heading" title={t("Danger zone")}>
               <SettingsPanel className="border-destructive/25">
                 <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                   <div className="min-w-0">
-                    <p className="text-[13.5px] font-medium text-foreground">Delete inbox</p>
+                    <p className="text-[13.5px] font-medium text-foreground">{t("Delete inbox")}
+                  </p>
                     <p className="mt-1 break-words text-[13px] leading-5 text-muted-foreground">
-                      Permanently deletes {mailbox.address} and all of its conversations.
+                      {t("Permanently deletes {address} and all of its conversations.", { address: mailbox.address })}
                     </p>
                   </div>
                   <Button
@@ -539,7 +542,7 @@ export function AgentSettings(props: {
                     }}
                   >
                     <TrashIcon className="h-3.5 w-3.5" />
-                    Delete inbox
+                    {t("Delete inbox")}
                   </Button>
                 </div>
               </SettingsPanel>
@@ -551,13 +554,13 @@ export function AgentSettings(props: {
               <span className="flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
                 <SparklesIcon className="h-[18px] w-[18px]" />
               </span>
-              <p className="mt-3 text-[13px] font-medium text-foreground">No inbox to configure</p>
+              <p className="mt-3 text-[13px] font-medium text-foreground">{t("No inbox to configure")}</p>
               <p className="mt-1 text-[12.5px] text-muted-foreground">
-                Add an inbox before configuring the agent.
+                {t("Add an inbox before configuring the agent.")}
               </p>
               <Button className="mt-4" onClick={openMailboxEditor}>
                 <PlusIcon className="h-4 w-4" />
-                Add inbox
+                {t("Add inbox")}
               </Button>
             </div>
           </SettingsPanel>
@@ -604,7 +607,7 @@ export function AgentSettings(props: {
           }
         }}
       >
-        <DialogContent
+        <DialogContent closeLabel={t("Close")}
           showCloseButton={!addMailbox.isPending && !configureAndAddMailbox.isPending}
           className={`max-h-[calc(100dvh-2rem)] overflow-y-auto ${inboxSetup ? "sm:max-w-[40rem]" : "sm:max-w-md"}`}
         >
@@ -618,12 +621,12 @@ export function AgentSettings(props: {
             }}
           >
             <DialogHeader>
-              <DialogTitle>{inboxSetup ? "Set up inbox" : "Add inbox"}</DialogTitle>
+              <DialogTitle>{inboxSetup ? t("Set up inbox") : t("Add inbox")}</DialogTitle>
             </DialogHeader>
 
             {!inboxSetup ? (
               <div className="py-5">
-                <Field label="Email address">
+                <Field label={t("Email address")}>
                   <Input
                     type="email"
                     value={mailboxAddress}
@@ -642,9 +645,9 @@ export function AgentSettings(props: {
 
                 {domains.isError && (
                   <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-                    <p className="text-sm text-destructive">Couldn’t check email setup.</p>
+                    <p className="text-sm text-destructive">{t("Couldn’t check email setup.")}</p>
                     <Button type="button" variant="outline" size="sm" onClick={() => domains.refetch()}>
-                      Retry
+                      {t("Retry")}
                     </Button>
                   </div>
                 )}
@@ -653,8 +656,8 @@ export function AgentSettings(props: {
                   <p className="mt-3 text-sm text-destructive" role="alert">
                     {mailboxValidationError ??
                       (addMailbox.error instanceof Error
-                        ? addMailbox.error.message
-                        : "Couldn’t add this inbox")}
+                        ? errorMessage(addMailbox.error.message)
+                        : t("Couldn’t add this inbox"))}
                   </p>
                 )}
               </div>
@@ -674,78 +677,68 @@ export function AgentSettings(props: {
                       setSendingConfirmed(false);
                     }}
                   >
-                    Edit
+                    {t("Edit")}
                   </Button>
                 </div>
 
                 <p className="pt-4 text-sm leading-5 text-muted-foreground">
-                  Finish these two steps in Cloudflare so this inbox can receive and send mail.
+                  {t("Finish these two steps in Cloudflare so this inbox can receive and send mail.")}
                 </p>
 
                 <ol className="divide-y">
                   <li className="flex items-start gap-3 py-4">
                     <SetupStepNumber number={1} done={routingConfirmed} />
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-medium">Route incoming mail to Mailroom</h3>
+                      <h3 className="text-sm font-medium">{t("Route incoming mail to Mailroom")}</h3>
                       <ol className="mt-2 list-decimal space-y-1 pl-4 text-sm leading-5 text-muted-foreground marker:text-muted-foreground/70">
                         <li>
-                          Open Email Routing for{" "}
-                          <span className="break-words font-medium text-foreground">{inboxSetup.domainName}</span>{" "}
-                          and go to Routing rules.
+                          <Trans message="Open Email Routing for {domain} and go to Routing rules." values={{ domain: <span className="break-words font-medium text-foreground">{inboxSetup.domainName}</span> }} />
                         </li>
                         <li>
-                          Enable <span className="font-medium text-foreground">Catch-all</span>. Mailroom
-                          still rejects addresses you haven’t added.
+                          {t("Enable Catch-all. Mailroom still rejects addresses you haven’t added.")}
                         </li>
                         <li>
-                          Choose <span className="font-medium text-foreground">Send to a Worker</span>,
-                          select the Worker running this Mailroom, and save.
+                          {t("Choose Send to a Worker, select the Worker running this Mailroom, and save.")}
                         </li>
                       </ol>
                       <details className="mt-2 text-sm leading-5">
                         <summary className="cursor-pointer rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
-                          Using a subdomain or only this address?
+                          {t("Using a subdomain or only this address?")}
                         </summary>
                         <p className="mt-1 text-muted-foreground">
-                          Catch-all only works on root domains. Instead, add{" "}
-                          <span className="break-words font-medium text-foreground">{inboxSetup.address}</span>{" "}
-                          as a custom address and send it to the same Worker.
+                          <Trans message="Catch-all only works on root domains. Instead, add {address} as a custom address and send it to the same Worker." values={{ address: <span className="break-words font-medium text-foreground">{inboxSetup.address}</span> }} />
                         </p>
                       </details>
                       <Button asChild type="button" variant="outline" size="sm" className="mt-3">
                         <a href={CLOUDFLARE_EMAIL_ROUTING_URL} target="_blank" rel="noreferrer">
-                          Open Email Routing
-                          <ExternalLinkIcon />
+                          {t("Open Email Routing")}<ExternalLinkIcon />
                         </a>
                       </Button>
                       <SetupStepConfirm
                         id="confirm-email-routing"
                         checked={routingConfirmed}
                         onCheckedChange={setRoutingConfirmed}
-                        label="I’ve set up routing"
+                        label={t("I’ve set up routing")}
                       />
                     </div>
                   </li>
                   <li className="flex items-start gap-3 py-4">
                     <SetupStepNumber number={2} done={sendingConfirmed} />
                     <div className="min-w-0 flex-1">
-                      <h3 className="text-sm font-medium">Turn on sending for this domain</h3>
+                      <h3 className="text-sm font-medium">{t("Turn on sending for this domain")}</h3>
                       <p className="mt-2 text-sm leading-5 text-muted-foreground">
-                        In Email Sending, onboard{" "}
-                        <span className="break-words font-medium text-foreground">{inboxSetup.domainName}</span>{" "}
-                        and wait until its status is Active. This can take a few minutes.
+                        <Trans message="In Email Sending, onboard {domain} and wait until its status is Active. This can take a few minutes." values={{ domain: <span className="break-words font-medium text-foreground">{inboxSetup.domainName}</span> }} />
                       </p>
                       <Button asChild type="button" variant="outline" size="sm" className="mt-3">
                         <a href={CLOUDFLARE_EMAIL_SENDING_URL} target="_blank" rel="noreferrer">
-                          Open Email Sending
-                          <ExternalLinkIcon />
+                          {t("Open Email Sending")}<ExternalLinkIcon />
                         </a>
                       </Button>
                       <SetupStepConfirm
                         id="confirm-email-sending"
                         checked={sendingConfirmed}
                         onCheckedChange={setSendingConfirmed}
-                        label="Sending is active"
+                        label={t("Sending is active")}
                       />
                     </div>
                   </li>
@@ -754,8 +747,8 @@ export function AgentSettings(props: {
                 {configureAndAddMailbox.isError && (
                   <p className="text-sm text-destructive" role="alert">
                     {configureAndAddMailbox.error instanceof Error
-                      ? configureAndAddMailbox.error.message
-                      : "Couldn’t add this inbox"}
+                      ? errorMessage(configureAndAddMailbox.error.message)
+                      : t("Couldn’t add this inbox")}
                   </p>
                 )}
               </div>
@@ -765,10 +758,10 @@ export function AgentSettings(props: {
               {inboxSetup && (
                 <p className="mr-auto text-xs text-muted-foreground" aria-live="polite">
                   {setupStepsRemaining === 0
-                    ? "Ready to add"
+                    ? t("Ready to add")
                     : setupStepsRemaining === 1
-                      ? "1 step left"
-                      : "2 steps left"}
+                      ? t("1 step left")
+                      : t("2 steps left")}
                 </p>
               )}
               <div className="flex w-full flex-col-reverse gap-2 sm:w-auto sm:flex-row">
@@ -778,8 +771,8 @@ export function AgentSettings(props: {
                   disabled={addMailbox.isPending || configureAndAddMailbox.isPending}
                   onClick={() => setMailboxEditorOpen(false)}
                 >
-                  Cancel
-                </Button>
+                  {t("Cancel")}
+          </Button>
                 <Button
                   type="submit"
                   disabled={
@@ -792,8 +785,8 @@ export function AgentSettings(props: {
                   }
                 >
                   {addMailbox.isPending || configureAndAddMailbox.isPending
-                    ? "Adding…"
-                    : "Add inbox"}
+                    ? t("Adding…")
+                    : t("Add inbox")}
                 </Button>
               </div>
             </DialogFooter>
@@ -807,54 +800,46 @@ export function AgentSettings(props: {
           if (!open) setRoutingAddress(null);
         }}
       >
-        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
+        <DialogContent closeLabel={t("Close")} className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Set up email routing</DialogTitle>
+            <DialogTitle>{t("Set up email routing")}</DialogTitle>
             <DialogDescription>
-              If Catch-all or a rule for this address already sends mail to this Mailroom Worker,
-              there’s nothing more to do.
+              {t("If Catch-all or a rule for this address already sends mail to this Mailroom Worker, there’s nothing more to do.")}
             </DialogDescription>
           </DialogHeader>
           <div>
-            <h3 className="text-sm font-medium">Catch-all (recommended for root domains)</h3>
+            <h3 className="text-sm font-medium">{t("Catch-all (recommended for root domains)")}</h3>
             <p className="mt-1 text-sm leading-5 text-muted-foreground">
-              Configure it once, then add future inboxes in Mailroom without extra routing rules.
+              {t("Configure it once, then add future inboxes in Mailroom without extra routing rules.")}
             </p>
           </div>
           <ol className="list-decimal space-y-2 pl-5 text-sm leading-6">
             <li>
-              Open Email Routing for <span className="break-all font-medium">{routingAddress?.split("@")[1]}</span> and
-              go to Routing rules.
+              <Trans message="Open Email Routing for {domain} and go to Routing rules." values={{ domain: <span className="break-all font-medium">{routingAddress?.split("@")[1]}</span> }} />
             </li>
             <li>
-              Enable <span className="font-medium">Catch-all</span>.
+              {t("Enable Catch-all.")}
             </li>
             <li>
-              Choose <span className="font-medium">Send to a Worker</span> and select the Worker running
-              this Mailroom, then save the rule.
+              {t("Choose Send to a Worker and select the Worker running this Mailroom, then save the rule.")}
             </li>
           </ol>
           <p className="text-sm leading-5 text-muted-foreground">
-            Mailroom rejects addresses you haven’t added. Existing rules for specific addresses
-            take priority over Catch-all.
+            {t("Mailroom rejects addresses you haven’t added. Existing rules for specific addresses take priority over Catch-all.")}
           </p>
           <details className="text-sm leading-6">
             <summary className="cursor-pointer rounded-sm font-medium focus-visible:outline-2 focus-visible:outline-ring">
-              Route only this address, or use a subdomain
+              {t("Route only this address, or use a subdomain")}
             </summary>
             <p className="mt-2 text-muted-foreground">
-              Catch-all is only available for root domains. To route this address individually,
-              add <span className="break-words font-medium text-foreground">{routingAddress}</span> as
-              a custom address in Routing rules. Choose Send to a Worker, select the Worker
-              running this Mailroom, and save.
+              <Trans message="Catch-all is only available for root domains. To route this address individually, add {address} as a custom address in Routing rules. Choose Send to a Worker, select the Worker running this Mailroom, and save." values={{ address: <span className="break-words font-medium text-foreground">{routingAddress}</span> }} />
             </p>
           </details>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setRoutingAddress(null)}>Close</Button>
+            <Button variant="outline" onClick={() => setRoutingAddress(null)}>{t("Close")}</Button>
             <Button asChild>
               <a href={CLOUDFLARE_EMAIL_ROUTING_URL} target="_blank" rel="noreferrer">
-                Open Email Routing
-                <ExternalLinkIcon />
+                {t("Open Email Routing")}<ExternalLinkIcon />
               </a>
             </Button>
           </DialogFooter>
@@ -872,7 +857,7 @@ export function AgentSettings(props: {
           }
         }}
       >
-        <DialogContent showCloseButton={!removeMailbox.isPending} className="sm:max-w-md">
+        <DialogContent closeLabel={t("Close")} showCloseButton={!removeMailbox.isPending} className="sm:max-w-md">
           <form
             className="grid gap-4"
             onSubmit={(event) => {
@@ -887,14 +872,14 @@ export function AgentSettings(props: {
             }}
           >
             <DialogHeader>
-              <DialogTitle className="break-words">Delete {mailbox?.address}?</DialogTitle>
+              <DialogTitle className="break-words">{t("Delete {name}?", { name: mailbox?.address ?? "" })}</DialogTitle>
               <DialogDescription>
-                This permanently deletes its conversations, drafts, and playbooks. This can’t be undone.
+                {t("This permanently deletes its conversations, drafts, and playbooks. This can’t be undone.")}
               </DialogDescription>
             </DialogHeader>
 
             {mailbox && (
-              <Field label={`Type ${mailbox.address} to confirm`}>
+              <Field label={t("Type {address} to confirm", { address: mailbox.address })}>
                 <Input
                   value={deleteInboxConfirmation}
                   onChange={(event) => {
@@ -912,8 +897,8 @@ export function AgentSettings(props: {
             {removeMailbox.isError && (
               <p className="text-sm text-destructive" role="alert">
                 {removeMailbox.error instanceof Error
-                  ? removeMailbox.error.message
-                  : "Couldn’t delete this inbox"}
+                  ? errorMessage(removeMailbox.error.message)
+                  : t("Couldn’t delete this inbox")}
               </p>
             )}
 
@@ -924,8 +909,8 @@ export function AgentSettings(props: {
                 onClick={() => setDeleteInboxOpen(false)}
                 disabled={removeMailbox.isPending}
               >
-                Cancel
-              </Button>
+                {t("Cancel")}
+          </Button>
               <Button
                 type="submit"
                 variant="destructive"
@@ -935,7 +920,7 @@ export function AgentSettings(props: {
                   removeMailbox.isPending
                 }
               >
-                {removeMailbox.isPending ? "Deleting…" : "Delete inbox"}
+                {removeMailbox.isPending ? t("Deleting…") : t("Delete inbox")}
               </Button>
             </DialogFooter>
           </form>
@@ -982,6 +967,7 @@ function PlaybookRow(props: {
   onCancelDelete: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   const enabled = Boolean(props.playbook.enabled);
   return (
     <ListRow
@@ -989,7 +975,7 @@ function PlaybookRow(props: {
       badge={
         !enabled && (
           <Badge variant="secondary" className="h-5 rounded-md px-1.5 text-[11px] font-medium text-muted-foreground">
-            Disabled
+            {t("Disabled")}
           </Badge>
         )
       }
@@ -1005,7 +991,7 @@ function PlaybookRow(props: {
       onDelete={props.onDelete}
       leading={
         <Switch
-          aria-label={`${enabled ? "Disable" : "Enable"} ${props.playbook.name}`}
+          aria-label={t(enabled ? "Disable {name}" : "Enable {name}", { name: props.playbook.name })}
           onCheckedChange={props.onToggle}
           checked={enabled}
           disabled={props.toggling}
@@ -1022,7 +1008,7 @@ function ListRow(props: {
   description: string;
   detail?: string;
   muted?: boolean;
-  entity: string;
+  entity: "playbook" | "label";
   leading: React.ReactNode;
   deleting: boolean;
   confirmDelete: boolean;
@@ -1031,6 +1017,7 @@ function ListRow(props: {
   onCancelDelete: () => void;
   onDelete: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <li className="group flex items-start gap-3 px-4 py-3.5 sm:px-5">
       <span className="flex h-6 shrink-0 items-center">{props.leading}</span>
@@ -1044,19 +1031,19 @@ function ListRow(props: {
         </p>
         {props.detail && (
           <p className="mt-1 line-clamp-1 text-xs leading-5 text-muted-foreground/90">
-            <span className="font-medium text-foreground/70">How to reply · </span>
+            <span className="font-medium text-foreground/70">{t("How to reply · ")}</span>
             {props.detail}
           </p>
         )}
       </div>
       {props.confirmDelete ? (
-        <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label={`Confirm delete ${props.title}`}>
-          <span className="mr-1 hidden text-xs text-destructive sm:inline">Delete this {props.entity}?</span>
+        <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label={t("Confirm delete {name}", { name: props.title })}>
+          <span className="mr-1 hidden text-xs text-destructive sm:inline">{t(props.entity === "playbook" ? "Delete this playbook?" : "Delete this label?")}</span>
           <Button variant="ghost" size="sm" onClick={props.onCancelDelete}>
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button variant="destructive" size="sm" onClick={props.onDelete} disabled={props.deleting}>
-            {props.deleting ? "Deleting…" : "Delete"}
+            {props.deleting ? t("Deleting…") : t("Delete")}
           </Button>
         </div>
       ) : (
@@ -1066,8 +1053,8 @@ function ListRow(props: {
             size="icon-sm"
             onClick={props.onEdit}
             className="text-muted-foreground"
-            aria-label={`Edit ${props.title}`}
-            title="Edit"
+            aria-label={t("Edit {name}", { name: props.title })}
+            title={t("Edit")}
           >
             <PencilIcon className="h-3.5 w-3.5" />
           </Button>
@@ -1076,8 +1063,8 @@ function ListRow(props: {
             size="icon-sm"
             onClick={props.onRequestDelete}
             className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            aria-label={`Delete ${props.title}`}
-            title="Delete"
+            aria-label={t("Delete {name}", { name: props.title })}
+            title={t("Delete")}
           >
             <TrashIcon className="h-3.5 w-3.5" />
           </Button>
@@ -1110,13 +1097,14 @@ function MailboxSelect(props: {
   selectedMailboxId: number | null;
   onSelect: (id: number) => void;
 }) {
+  const { t } = useI18n();
   return (
     <Select
       value={props.selectedMailboxId === null ? undefined : String(props.selectedMailboxId)}
       onValueChange={(value) => props.onSelect(Number(value))}
     >
-      <SelectTrigger className="h-9 w-full bg-background text-sm" aria-label="Inbox to configure">
-        <SelectValue placeholder="Choose inbox" />
+      <SelectTrigger className="h-9 w-full bg-background text-sm" aria-label={t("Inbox to configure")}>
+        <SelectValue placeholder={t("Choose inbox")} />
       </SelectTrigger>
       <SelectContent>
         {props.mailboxes.map((item) => (
@@ -1137,6 +1125,7 @@ function PlaybookEditor(props: {
   onClose: () => void;
   onSave: () => void;
 }) {
+  const { t } = useI18n();
   const valid =
     props.state.name.trim() &&
     props.state.whenToUse.trim() &&
@@ -1147,50 +1136,50 @@ function PlaybookEditor(props: {
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden sm:max-w-2xl">
+      <DialogContent closeLabel={t("Close")} className="max-h-[calc(100dvh-2rem)] overflow-hidden sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{props.state.id ? "Edit playbook" : "New playbook"}</DialogTitle>
+          <DialogTitle>{props.state.id ? t("Edit playbook") : t("New playbook")}</DialogTitle>
         </DialogHeader>
 
         <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
-          <Field label="Name">
+          <Field label={t("Name")}>
             <Input
               value={props.state.name}
               onChange={(event) => update({ name: event.target.value })}
-              placeholder="Refund requests"
+              placeholder={t("Refund requests")}
               autoFocus
             />
           </Field>
 
-          <Field label="When to use">
+          <Field label={t("When to use")}>
             <Textarea
               value={props.state.whenToUse}
               onChange={(event) => update({ whenToUse: event.target.value })}
-              placeholder="Use when a customer asks to cancel a charge, reverse a payment, or receive a refund."
+              placeholder={t("Use when a customer asks to cancel a charge, reverse a payment, or receive a refund.")}
               rows={3}
             />
           </Field>
 
-          <Field label="How to reply">
+          <Field label={t("How to reply")}>
             <Textarea
               value={props.state.instructions}
               onChange={(event) => update({ instructions: event.target.value })}
-              placeholder="Acknowledge the request. Verify the payment before promising a refund. Do not promise an exact arrival date."
+              placeholder={t("Acknowledge the request. Verify the payment before promising a refund. Do not promise an exact arrival date.")}
               rows={5}
             />
           </Field>
 
-          <Field label="Example reply (optional)">
+          <Field label={t("Example reply (optional)")}>
             <Textarea
               value={props.state.exampleReply}
               onChange={(event) => update({ exampleReply: event.target.value })}
-              placeholder="Thanks for reaching out…"
+              placeholder={t("Thanks for reaching out…")}
               rows={5}
             />
           </Field>
 
           <label className="flex cursor-pointer items-center justify-between rounded-lg border bg-muted/40 px-3.5 py-3">
-            <span className="text-[13px] font-medium text-foreground">Enabled</span>
+            <span className="text-[13px] font-medium text-foreground">{t("Enabled")}</span>
             <Switch
               checked={props.state.enabled}
               onCheckedChange={(enabled) => update({ enabled })}
@@ -1199,7 +1188,7 @@ function PlaybookEditor(props: {
 
           {props.error && (
             <p role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive">
-              Couldn’t save this playbook. Check the fields and try again.
+              {t("Couldn’t save this playbook. Check the fields and try again.")}
             </p>
           )}
         </div>
@@ -1209,13 +1198,13 @@ function PlaybookEditor(props: {
             variant="outline"
             onClick={props.onClose}
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             onClick={props.onSave}
             disabled={!valid || props.saving}
           >
-            {props.saving ? "Saving…" : props.state.id ? "Save changes" : "Create playbook"}
+            {props.saving ? t("Saving…") : props.state.id ? t("Save changes") : t("Create playbook")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1266,6 +1255,7 @@ function LabelEditor(props: {
   onClose: () => void;
   onSave: () => void;
 }) {
+  const { t, errorMessage } = useI18n();
   const valid = props.state.name.trim() && props.state.condition.trim();
 
   const update = (fields: Partial<LabelEditorState>) =>
@@ -1273,13 +1263,13 @@ function LabelEditor(props: {
 
   return (
     <Dialog open onOpenChange={(open) => !open && props.onClose()}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-hidden sm:max-w-xl">
+      <DialogContent closeLabel={t("Close")} className="max-h-[calc(100dvh-2rem)] overflow-hidden sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{props.state.id ? "Edit label" : "New label"}</DialogTitle>
+          <DialogTitle>{props.state.id ? t("Edit label") : t("New label")}</DialogTitle>
         </DialogHeader>
 
         <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
-          <Field label="Name">
+          <Field label={t("Name")}>
             <Input
               value={props.state.name}
               onChange={(event) => update({ name: event.target.value })}
@@ -1288,21 +1278,21 @@ function LabelEditor(props: {
             />
           </Field>
 
-          <Field label="Match condition">
+          <Field label={t("Match condition")}>
             <Textarea
               value={props.state.condition}
               onChange={(event) => update({ condition: event.target.value })}
-              placeholder="Apply when the sender pitches writing a guest article for our blog, or asks us to publish their contributed post."
+              placeholder={t("Apply when the sender pitches writing a guest article for our blog, or asks us to publish their contributed post.")}
               rows={4}
             />
             <span className="mt-1.5 block text-xs leading-5 text-muted-foreground">
-              New incoming emails are checked against this description. Replies in existing conversations are not labeled.
+              {t("New incoming emails are checked against this description. Replies in existing conversations are not labeled.")}
             </span>
           </Field>
 
           {props.error && (
             <p role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs leading-5 text-destructive">
-              {props.errorMessage ?? "Couldn’t save this label. Check the fields and try again."}
+              {(props.errorMessage ? errorMessage(props.errorMessage) : null) ?? t("Couldn’t save this label. Check the fields and try again.")}
             </p>
           )}
         </div>
@@ -1312,13 +1302,13 @@ function LabelEditor(props: {
             variant="outline"
             onClick={props.onClose}
           >
-            Cancel
+            {t("Cancel")}
           </Button>
           <Button
             onClick={props.onSave}
             disabled={!valid || props.saving}
           >
-            {props.saving ? "Saving…" : props.state.id ? "Save changes" : "Create label"}
+            {props.saving ? t("Saving…") : props.state.id ? t("Save changes") : t("Create label")}
           </Button>
         </DialogFooter>
       </DialogContent>

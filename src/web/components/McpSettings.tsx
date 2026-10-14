@@ -1,3 +1,4 @@
+import { useI18n, Trans } from "../LanguageProvider";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { ACCESS_APPLICATIONS_URL } from "../cloudflare-dashboard";
@@ -25,6 +26,7 @@ async function checkPublicOAuth(): Promise<boolean> {
 }
 
 export function McpSettings() {
+  const { t } = useI18n();
   const status = useQuery({
     queryKey: ["mcp-public-oauth"],
     queryFn: checkPublicOAuth,
@@ -37,7 +39,7 @@ export function McpSettings() {
     <SettingsBlock
       id="mcp-settings-heading"
       title="MCP"
-      description="Internal clients only. Ask an administrator to configure your client ID and callback URL before connecting. Public registration is disabled."
+      description={t("Internal clients only. Ask an administrator to configure your client ID and callback URL before connecting. Public registration is disabled.")}
     >
       <SettingsPanel>
         <div className="px-4 py-4 sm:px-5">
@@ -47,10 +49,9 @@ export function McpSettings() {
         {status.data === false && (
           <div className="border-t px-4 py-4 text-[13px] leading-6 text-muted-foreground sm:px-5 [&_strong]:font-medium [&_strong]:text-foreground">
             <p>
-              Access is blocking MCP clients. In{" "}
-              <DashLink href={ACCESS_APPLICATIONS_URL}>Access applications</DashLink>, add a
-              Self-hosted app for these paths with a <strong>Bypass</strong> policy for{" "}
-              <strong>Everyone</strong>:
+              <Trans message="Access is blocking MCP clients. In {link}, add a Self-hosted app for these paths with a Bypass policy for Everyone:" values={{
+                link: <DashLink href={ACCESS_APPLICATIONS_URL}>{t("Access applications")}</DashLink>,
+              }} />
             </p>
             <div className="mt-3 space-y-2">
               <CopyField value={`${host}/mcp`} />
@@ -63,7 +64,7 @@ export function McpSettings() {
               onClick={() => status.refetch()}
               disabled={status.isFetching}
             >
-              {status.isFetching ? "Checking…" : "Check again"}
+              {status.isFetching ? t("Checking…") : t("Check again")}
             </Button>
           </div>
         )}
