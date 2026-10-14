@@ -105,7 +105,7 @@ test("Chat Completions preserves the API root and sends one bounded request", as
     calls++;
     assert.equal(url, settings.ai_base_url + "/chat/completions");
     assert.equal(options.headers.Authorization, "Bearer secret-test-key");
-    assert.equal(options.redirect, "error");
+    assert.equal(options.redirect, "manual");
     assert.ok(options.signal instanceof AbortSignal);
     assert.deepEqual(JSON.parse(options.body), {
       model: "test-model",
@@ -129,6 +129,7 @@ test("Chat Completions preserves the API root and sends one bounded request", as
 test("Responses uses stateless instructions/input and reads typed output items", async (t) => {
   t.mock.method(globalThis, "fetch", async (url, options) => {
     assert.equal(url, settings.ai_base_url + "/responses");
+    assert.equal(options.redirect, "manual");
     assert.deepEqual(JSON.parse(options.body), {
       model: "test-model",
       instructions: "Write a reply",
@@ -148,6 +149,30 @@ test("Responses uses stateless instructions/input and reads typed output items",
     ).text,
     "Reply",
   );
+});
+
+test("external providers reject redirects without forwarding credentials or retrying", async (t) => {
+  for (const provider of ["openai-compatible", "openai-responses"]) {
+    for (const status of [301, 302, 303, 307, 308]) {
+      let calls = 0;
+      let canceled = false;
+      t.mock.method(globalThis, "fetch", async (url, options) => {
+        calls++;
+        assert.equal(options.redirect, "manual");
+        assert.ok(url.startsWith(settings.ai_base_url + "/"));
+        return new Response(new ReadableStream({ cancel() { canceled = true; } }), {
+          status,
+          headers: { Location: "https://other.example/private" },
+        });
+      });
+      await assert.rejects(
+        generateAiText(env({ ...settings, ai_provider: provider }), prompt),
+        { message: `AI request failed (HTTP ${status})` },
+      );
+      assert.equal(calls, 1);
+      assert.equal(canceled, true);
+    }
+  }
 });
 
 test("disabled or missing credentials fail before dispatch, without provider fallback", async (t) => {

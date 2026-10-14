@@ -15,6 +15,7 @@ import {
 import { enqueueDraftRun, expireDraftRuns } from "../agent/runs.ts";
 import { parseAiSettings, type AiSettings } from "../../shared/ai-model.ts";
 import { AiConfigurationError } from "../ai-model.ts";
+import { AiRequestError } from "../ai.ts";
 import {
   AttachmentInputError,
   type OutboundAttachmentInput,
@@ -831,6 +832,7 @@ api.post("/threads/:id/draft/revise", async (c) => {
     if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
     if (error instanceof DraftRevisionError)
       return c.json({ error: error.message }, error.status);
+    if (error instanceof AiRequestError) return c.json({ error: error.message }, 502);
     console.error("Draft revision failed", error);
     return c.json(
       { error: "The AI couldn’t write a new draft. Try again." },

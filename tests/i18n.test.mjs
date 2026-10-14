@@ -56,6 +56,10 @@ test("dates use the selected UI language", () => {
 
 test("dynamic API error translations retain limits and HTTP status", () => {
   assert.equal(localizeError("zh-CN", "Request failed (503)"), "请求失败（503）");
+  assert.equal(localizeError("zh-CN", "AI request failed (HTTP 401)"), "AI 请求失败（HTTP 401）");
+  assert.equal(localizeError("en", "AI request failed (HTTP 429)"), "AI request failed (HTTP 429)");
+  assert.equal(localizeError("zh-CN", "AI request failed or timed out"), "AI 请求失败或超时");
+  assert.equal(localizeError("zh-CN", "AI response did not complete"), "AI 响应未完成");
   assert.equal(localizeError("zh-CN", "This inbox already has the maximum of 20 labels"), "此收件箱的标签数量已达到上限（20 个）");
   assert.equal(localizeError("zh-CN", "Message text must be at most 100,000 characters"), "邮件正文不能超过 100,000 个字符");
   assert.equal(localizeError("en", "Attachments are limited to 3 MB in total"), "Attachments are limited to 3 MB in total");

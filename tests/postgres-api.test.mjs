@@ -162,6 +162,33 @@ for (const provider of ["openai-compatible", "openai-responses"]) {
   });
 }
 
+test("draft revision exposes safe AI errors and preserves the pending draft", async (t) => {
+  const f = await fixture(t);
+  await f.deliver(mail("revision-error"));
+  f.env.AI_API_KEY = "secret-do-not-expose";
+  await f.request("/settings/general", "PATCH", externalAi("openai-responses"));
+  const { thread_id: threadId } = await f.db.one("SELECT thread_id FROM messages");
+  const draft = await f.db.one(
+    "INSERT INTO drafts (thread_id, text_body, created_by, status) VALUES ($1, 'Keep this draft', 'agent', 'pending') RETURNING *",
+    [threadId],
+  );
+  for (const [result, expected] of [
+    [() => new Response("secret-do-not-expose private email", { status: 401 }), "AI request failed (HTTP 401)"],
+    [() => Response.json({ status: "incomplete" }), "AI response did not complete"],
+    [() => { throw new Error("secret-do-not-expose private email"); }, "AI request failed or timed out"],
+  ]) {
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async () => { calls++; return result(); });
+    const response = await f.request(`/threads/${threadId}/draft/revise`, "POST", {
+      instruction: "Shorter", current_text: draft.text_body,
+    });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: expected });
+    assert.equal(calls, 1);
+    assert.deepEqual((await f.db.query("SELECT * FROM drafts")).rows, [draft]);
+  }
+});
+
 test("provider failure is safe to redeliver; only an explicit retry can call AI again", async (t) => {
   const f = await fixture(t);
   f.env.AI_API_KEY = "secret-do-not-log";

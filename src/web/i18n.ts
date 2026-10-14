@@ -62,6 +62,7 @@ export function localizeError(locale: Locale, message: string): string {
 
 const ERROR_PATTERNS: readonly [RegExp, MessageKey, string][] = [
   [/^Request failed \((\d+)\)$/, "Request failed ({status})", "status"],
+  [/^AI request failed \(HTTP (\d+)\)$/, "AI request failed (HTTP {status})", "status"],
   [/^Could not send \((\d+)\)$/, "Could not send ({status})", "status"],
   [/^This inbox already has the maximum of (\d+) labels$/, "This inbox already has the maximum of {count} labels", "count"],
   [/^Keep the instruction under (\d+) characters$/, "Keep the instruction under {count} characters", "count"],

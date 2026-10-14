@@ -67,7 +67,8 @@ export async function generateAiText(
           "Content-Type": "application/json",
           Authorization: `Bearer ${env.AI_API_KEY!.trim()}`,
         },
-        redirect: "error",
+        // Workers does not support "error". Reject 3xx below without forwarding the key.
+        redirect: "manual",
         signal,
         body: JSON.stringify({
           model,
