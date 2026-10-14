@@ -36,6 +36,9 @@
       "OAUTH_KV": {
         "description": "Stores OAuth clients and tokens for the built-in MCP server at `/mcp`. Use a namespace dedicated to this instance."
       },
+      "MCP_RATE_LIMITER": {
+        "description": "Limits public MCP and OAuth token requests before KV access. Use a rate limit namespace ID dedicated to this instance."
+      },
       "HYPERDRIVE": {
         "description": "Connects to your PostgreSQL database for mail, settings, raw MIME, and attachments. Create it with query caching disabled before deployment."
       }

@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { DRAFT_RUN_STATUSES } from "../shared/types.ts";
 import {
   AttachmentInputError,
   MAX_ATTACHMENTS_PER_MESSAGE,
@@ -41,7 +42,7 @@ const conversationSummarySchema = z.object({
   unread: z.boolean(),
   message_count: z.number(),
   has_pending_draft: z.boolean(),
-  ai_status: z.enum(["queued", "generating", "ready", "failed", "superseded"]).nullable(),
+  ai_status: z.enum(DRAFT_RUN_STATUSES).nullable(),
   last_message_direction: z.enum(["inbound", "outbound"]).nullable(),
   last_message_at: z.string(),
 });
@@ -218,7 +219,7 @@ export function createMailroomServer(env: McpEnv, identity: McpIdentity): McpSer
           created_at: z.string(),
         })),
         ai_drafting: z.object({
-          status: z.enum(["queued", "generating", "ready", "failed", "superseded"]),
+          status: z.enum(DRAFT_RUN_STATUSES),
           error: z.string().nullable(),
           started_at: z.string().nullable(),
           finished_at: z.string().nullable(),

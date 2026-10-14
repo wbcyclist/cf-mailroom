@@ -119,7 +119,7 @@ test("migration replay is idempotent and rejects edited migration history", asyn
   await client.connect();
   t.after(() => client.end());
   await migrate(client, () => {});
-  assert.equal((await db.one("SELECT count(*) AS n FROM schema_migrations")).n, 4);
+  assert.equal((await db.one("SELECT count(*) AS n FROM schema_migrations")).n, 5);
   await db.query("UPDATE schema_migrations SET checksum = 'changed' WHERE name = '0001_initial.sql'");
   await assert.rejects(migrate(client, () => {}), /Applied migration changed/);
   assert.equal((await db.one("SELECT count(*) AS n FROM global_settings")).n, 1);

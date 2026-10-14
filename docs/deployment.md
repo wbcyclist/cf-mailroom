@@ -51,6 +51,8 @@ Migrations run only from `migrations/postgres/`. Files in the parent `migrations
 directory are the historical SQLite schema and are never applied to PostgreSQL.
 The migration runner uses a PostgreSQL advisory lock and a transaction. It records
 checksums, skips applied files, and stops if an applied file was edited.
+Migration `0005_resource_guards.sql` adds inbound quotas, transactional mail
+storage accounting, and MCP request budgets. Apply it before running this version.
 
 Then connect to the `mailroom` database as its owner or an administrator:
 
@@ -119,7 +121,8 @@ before release and configure the build deploy command as
 `node scripts/check-database-config.mjs && npm run build && node scripts/deploy.mjs`.
 
 Review the bindings: `HYPERDRIVE`, `EMAIL`, `DRAFT_QUEUE`, `DRAFT_DLQ`, and
-`OAUTH_KV`. The queue consumer and dead-letter names must match their producers.
+`OAUTH_KV`, plus the `MCP_RATE_LIMITER` rate limit binding in `ratelimits`. The
+queue consumer and dead-letter names must match their producers.
 The ID-less OAuth KV binding is provisioned by Wrangler. Outbound sending also
 requires domain onboarding; a binding alone does not authorize a sender. The
 `AI` binding is optional and absent from the default configuration.
@@ -190,6 +193,39 @@ Do not deploy `wrangler.dev.jsonc` or expose the local dev server publicly.
 
 Repeat for additional addresses or domains; they can share the same Worker.
 
+### Inbound and storage limits
+
+The following Worker variables apply across all Inboxes in this instance:
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `INBOUND_MINUTE_MESSAGE_LIMIT` | `30` | Delivery attempts per UTC minute |
+| `INBOUND_DAILY_MESSAGE_LIMIT` | `500` | Delivery attempts per UTC day |
+| `INBOUND_DAILY_BYTE_LIMIT` | `104857600` | Raw MIME bytes per UTC day (100 MiB) |
+| `MAIL_STORAGE_LIMIT_BYTES` | `1073741824` | Stored mail payload ceiling for inbound admission (1 GiB) |
+
+The Worker reserves count and raw bytes in PostgreSQL before reading or parsing
+MIME. Failed parsing and duplicate deliveries consume that reservation. Each
+message must also fit within 25 MiB and contain at most 100 attachments. Setting
+any limit to `0`, or an invalid value, stops new inbound mail. Minute and day
+limits recover at their UTC boundaries; database errors stop delivery.
+
+**A quota rejection is a permanent SMTP rejection, not a deferred delivery.**
+The sender must resend after the quota resets or the administrator frees capacity
+or raises the limit. Mailroom does not store or replay rejected mail. This differs
+from AI draft jobs, which can wait in the database for their budget to reset.
+See the [Email handler API](https://developers.cloudflare.com/email-service/api/route-emails/email-handler/).
+
+Storage accounting includes raw MIME, decoded text and HTML bodies, and attachment
+contents for inbound and outbound mail. The inbound transaction checks and locks
+the counter before writing; concurrent deliveries cannot exceed the payload
+ceiling. Edits, deletion, and rollbacks update the counter through database
+triggers. Outbound writes are counted but do not use this inbound admission gate.
+No mail is deleted automatically. The counter does **not** include row metadata,
+indexes, WAL, or backups, so reserve extra disk capacity and monitor actual VPS
+usage. These controls bound admitted work, not Cloudflare invocation charges for
+all incoming traffic or another project's usage.
+
 ## Optional: configure AI
 
 AI is disabled by default. In **Settings → General → AI**, select a provider,
@@ -252,6 +288,11 @@ Missing bindings or secrets produce a setup message and prevent AI calls.
   malformed output is not saved as a draft or as labels.
 - Each new conversation evaluates at most 20 label rules and 8,000 body characters.
   Label failures do not block receipt of mail and are not retried automatically.
+- Draft context reads at most 12 messages, with each body cut to 24,000 characters
+  in PostgreSQL before transfer. The transcript uses at most 48,000 characters,
+  prioritizing the latest messages. It includes at most five recently updated
+  playbooks and 20 attachment descriptions. Label bodies are also cut in SQL.
+  These limits do not change the stored original mail.
 - Model calls have no automatic retries. Failed draft jobs require the **Retry**
   action; repeating a queue delivery does not call the model again. Fix a missing
   key, unavailable model, or provider error before retrying.
@@ -309,6 +350,10 @@ Conversation pages contain at most 20 message previews. Full bodies load on dema
 and are bounded to 128,000 characters per representation; larger inbound messages
 can be downloaded as original MIME. Replies require the reviewed message and
 recipient snapshot, a request body below 4 MiB, and at most 100,000 text characters.
+HTML mail cannot load external images, fonts, or CSS resources, including arbitrary
+same-origin API URLs. Current-message CID images use bounded attachment downloads
+and browser blob URLs: at most 10 PNG, JPEG, GIF, WebP, or AVIF images, 3 MiB per
+image, and 8 MiB total. SVG and other active image formats are not loaded inline.
 
 ## Optional: connect an AI agent over MCP
 
@@ -364,6 +409,34 @@ separately.
 `MCP_SEND_ENABLED=false` (a Worker variable) removes the send tools from every
 client immediately. `MCP_DAILY_SEND_LIMIT` (default 100) caps MCP sends per
 Access identity per UTC day.
+
+### Public endpoint protection
+
+The checked-in `MCP_RATE_LIMITER` binding admits up to 60 requests per minute per
+client IP. Its namespace ID (`187421`) must be unique to this instance within your
+Cloudflare account. This is an approximate, per-location limit, not an account
+spending cap. See the [Rate Limiting API](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/).
+Missing or unavailable rate protection returns HTTP 503 before OAuth KV access.
+
+After the edge check, PostgreSQL applies global request budgets to `/mcp` and
+`/mcp/oauth/token`, including invalid credentials:
+
+| Worker variable | Default | Meaning |
+| --- | ---: | --- |
+| `MCP_DAILY_REQUEST_LIMIT` | `5000` | Admitted MCP and token requests per UTC day |
+| `MCP_MONTHLY_REQUEST_LIMIT` | `100000` | Admitted MCP and token requests per UTC month |
+
+Both limits apply together. Exhaustion returns HTTP 429 with `Retry-After` and
+stops OAuth KV and tool calls until the relevant UTC reset. A value of `0` or an
+invalid value stops admission. Discovery and OPTIONS requests do not use these
+budgets. PostgreSQL failures return HTTP 503.
+
+OAuth token requests accept only URL-encoded forms up to 16 KiB and 16 fields.
+MCP resource bodies are limited to 5 MiB and read only after authentication.
+Limits apply to streamed bodies even without a valid Content-Length. Expected
+OAuth 4xx responses do not emit application error logs; 5xx logs are limited to
+one per minute per Worker isolate. Platform invocation logs and rejected requests
+can still consume Cloudflare resources.
 
 ## Optional: browser notifications
 
@@ -440,13 +513,16 @@ Keep your own values when conflicts touch instance-specific files:
 - **App loads but replies fail:** check Email Sending access, the paid plan,
   sender-domain verification, and the Inbox's sending address.
 - **Inbound mail does not appear:** check Email Routing targets this Worker and
-  the recipient has already been added as an Inbox.
+  the recipient has already been added as an Inbox. Check the sender's rejection
+  notice for inbound or storage limits; rejected mail must be resent.
 - **The setup screen keeps showing after adding variables:** saving variables
   redeploys the Worker; wait a few seconds and select **Check again**. If it
   says the values do not match, copy the values it shows now.
 - **MCP OAuth redirects to Access before discovery:** add the Bypass
   application for `/mcp` and `/.well-known` on that hostname. The
   card in **Settings → General** confirms when it works.
+- **MCP returns 429 or 503:** check `Retry-After`, the request budgets, the
+  `MCP_RATE_LIMITER` binding, migration `0005`, and PostgreSQL availability.
 
 ## Storage operations and verification
 

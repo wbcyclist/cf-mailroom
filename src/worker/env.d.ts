@@ -29,6 +29,13 @@ interface WorkerEnv {
   AI_DAILY_CALL_LIMIT?: string;
   AI_MONTHLY_CALL_LIMIT?: string;
   OAUTH_KV: KVNamespace;
+  MCP_RATE_LIMITER?: RateLimit;
+  MCP_DAILY_REQUEST_LIMIT?: string;
+  MCP_MONTHLY_REQUEST_LIMIT?: string;
+  INBOUND_MINUTE_MESSAGE_LIMIT?: string;
+  INBOUND_DAILY_MESSAGE_LIMIT?: string;
+  INBOUND_DAILY_BYTE_LIMIT?: string;
+  MAIL_STORAGE_LIMIT_BYTES?: string;
   MCP_SEND_ENABLED?: string;
   MCP_DAILY_SEND_LIMIT?: string;
   VAPID_PUBLIC_KEY?: string;

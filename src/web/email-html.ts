@@ -1,5 +1,6 @@
 import type { Attachment } from "../shared/types";
 import { collapseEmailQuotes } from "./email-quotes";
+import { selectInlineImages, type InlineImage } from "./email-images";
 
 const BLOCKED_ELEMENTS = [
   "script",
@@ -15,6 +16,12 @@ const BLOCKED_ELEMENTS = [
   "link",
   "meta",
   "base",
+  "svg",
+  "math",
+  "audio",
+  "video",
+  "source",
+  "track",
 ].join(",");
 
 const DOCUMENT_STYLE = `
@@ -57,8 +64,8 @@ const CONTENT_SECURITY_POLICY = [
   "default-src 'none'",
   "script-src 'none'",
   "style-src 'unsafe-inline'",
-  "img-src 'self' https: http: data:",
-  "font-src data:",
+  "img-src blob:",
+  "font-src 'none'",
   "connect-src 'none'",
   "media-src 'none'",
   "object-src 'none'",
@@ -67,7 +74,16 @@ const CONTENT_SECURITY_POLICY = [
   "base-uri 'none'",
 ].join("; ");
 
-export function buildEmailHtmlDocument(html: string, attachments: Attachment[]): string {
+export function inlineImageCandidates(html: string, attachments: Attachment[]): InlineImage[] {
+  const document = new DOMParser().parseFromString(html, "text/html");
+  const contentIds = new Set([...document.querySelectorAll("img")].flatMap(image => {
+    const source = image.getAttribute("src")?.trim() ?? "";
+    return /^cid:/i.test(source) ? [normalizeContentId(source.slice(4))] : [];
+  }));
+  return selectInlineImages(attachments.filter(item => item.content_id && contentIds.has(normalizeContentId(item.content_id))));
+}
+
+export function buildEmailHtmlDocument(html: string, attachments: Attachment[], imageSources: ReadonlyMap<number, string> = new Map()): string {
   const document = new DOMParser().parseFromString(html, "text/html");
   document.querySelectorAll(BLOCKED_ELEMENTS).forEach((element) => element.remove());
 
@@ -88,7 +104,7 @@ export function buildEmailHtmlDocument(html: string, attachments: Attachment[]):
 
   const attachmentsByContentId = new Map(
     attachments
-      .filter((attachment) => attachment.content_id)
+      .filter((attachment) => attachment.content_id && imageSources.has(attachment.id))
       .map((attachment) => [normalizeContentId(attachment.content_id!), attachment.id]),
   );
 
@@ -99,9 +115,9 @@ export function buildEmailHtmlDocument(html: string, attachments: Attachment[]):
     const source = image.getAttribute("src")?.trim() ?? "";
     if (/^cid:/i.test(source)) {
       const attachmentId = attachmentsByContentId.get(normalizeContentId(source.slice(4)));
-      if (attachmentId) image.setAttribute("src", `/api/attachments/${attachmentId}`);
+      if (attachmentId) image.setAttribute("src", imageSources.get(attachmentId)!);
       else image.removeAttribute("src");
-    } else if (!isAllowedImageSource(source)) {
+    } else {
       image.removeAttribute("src");
     }
   }
@@ -147,17 +163,6 @@ function safeDecodeURIComponent(value: string): string {
     return decodeURIComponent(value);
   } catch {
     return value;
-  }
-}
-
-function isAllowedImageSource(value: string): boolean {
-  if (!value) return false;
-  if (/^data:image\//i.test(value)) return true;
-  try {
-    const url = new URL(value, window.location.origin);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
   }
 }
 

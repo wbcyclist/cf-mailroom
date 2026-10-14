@@ -27,3 +27,15 @@ test("still splits a trailing run of quoted lines", () => {
     quoted: "> Old message\n> More history",
   });
 });
+
+test("inline replies scan each line a bounded number of times", t => {
+  const lines = 500;
+  const body = '> quoted\n'.repeat(lines) + 'Keep this inline answer';
+  const trim = String.prototype.trim;
+  let scans = 0;
+  t.mock.method(String.prototype, 'trim', function () {
+    if (++scans > lines * 8) throw new Error('Quote scan exceeded linear work');
+    return trim.call(this);
+  });
+  assert.deepEqual(splitQuotedTail(body), { main: body, quoted: null });
+});

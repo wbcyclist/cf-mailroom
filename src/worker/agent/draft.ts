@@ -6,6 +6,7 @@ import type { Draft } from "../../shared/types.ts";
 
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_MESSAGE_CHARS = 24_000;
+const MAX_TRANSCRIPT_CHARS = 48_000;
 
 interface AvailablePlaybook {
   id: number;
@@ -177,7 +178,8 @@ export async function reviseDraft(
       run_status: string | null;
     }
   >(
-    `SELECT t.id AS thread_id, t.subject, m.address, m.agent_mode, m.agent_instructions,
+    `SELECT t.id AS thread_id, left(t.subject, 1000) AS subject, m.address, m.agent_mode,
+            left(m.agent_instructions, 8000) AS agent_instructions,
             latest.id AS inbound_message_id, dr.status AS run_status
      FROM threads t
      JOIN mailboxes m ON m.id = t.mailbox_id
@@ -250,7 +252,8 @@ async function loadDraftInputs(
     text_body: string | null;
     is_auto_submitted: number;
   }>(
-    `SELECT id, direction, sent_by, from_address, from_name, text_body, is_auto_submitted
+    `SELECT id, direction, sent_by, left(from_address, 500) AS from_address,
+       left(from_name, 500) AS from_name, left(text_body, 24000) AS text_body, is_auto_submitted
      FROM messages WHERE thread_id = $1 ${upTo}
      ORDER BY created_at DESC, id DESC LIMIT $${mode === "automatic" ? 3 : 2}`,
     [
@@ -270,32 +273,37 @@ async function loadDraftInputs(
   )
     return null;
 
-  const transcript = [...messages]
-    .reverse()
-    .map((message) => {
-      const who =
-        message.direction === "outbound"
-          ? `${context.address} (us, sent by ${message.sent_by})`
-          : message.from_name
-            ? `${message.from_name} <${message.from_address}>`
-            : message.from_address;
-      const body = (message.text_body ?? "").trim().slice(0, MAX_MESSAGE_CHARS);
-      return `From: ${who}\n${body}`;
-    })
-    .join("\n\n---\n\n");
+  let remaining = MAX_TRANSCRIPT_CHARS;
+  const transcriptParts: string[] = [];
+  for (const message of messages) {
+    if (remaining <= 0) break;
+    const who =
+      message.direction === "outbound"
+        ? `${context.address} (us, sent by ${message.sent_by})`
+        : message.from_name
+          ? `${message.from_name} <${message.from_address}>`
+          : message.from_address;
+    const body = (message.text_body ?? "").trim().slice(0, MAX_MESSAGE_CHARS);
+    const part = `From: ${who}\n${body}`.slice(0, remaining);
+    transcriptParts.push(part);
+    remaining -= part.length + 7;
+  }
+  const transcript = transcriptParts.reverse().join("\n\n---\n\n");
 
   const [{ rows: playbooks }, { rows: attachments }] = await Promise.all([
     env.DB.query<AvailablePlaybook>(
-      `SELECT id, name, when_to_use, instructions, example_reply
+      `SELECT id, left(name, 200) AS name, left(when_to_use, 500) AS when_to_use,
+         left(instructions, 2000) AS instructions, left(example_reply, 500) AS example_reply
        FROM playbooks
        WHERE mailbox_id = (SELECT mailbox_id FROM threads WHERE id = $1)
          AND enabled = 1
-       ORDER BY updated_at DESC, id DESC`,
+       ORDER BY updated_at DESC, id DESC LIMIT 5`,
       [context.thread_id],
     ),
     env.DB.query<{ filename: string; content_type: string; size: number }>(
-      `SELECT COALESCE(filename, 'unnamed attachment') AS filename, content_type, size
-       FROM attachments WHERE message_id = $1 ORDER BY id`,
+      `SELECT left(COALESCE(filename, 'unnamed attachment'), 255) AS filename,
+         left(content_type, 127) AS content_type, size
+       FROM attachments WHERE message_id = $1 ORDER BY id LIMIT 20`,
       [context.inbound_message_id],
     ),
   ]);
@@ -368,7 +376,8 @@ async function loadRunContext(
 ): Promise<DraftRunContext | null> {
   return env.DB.one<DraftRunContext>(
     `SELECT dr.id AS run_id, dr.thread_id, dr.inbound_message_id,
-            t.subject, m.address, m.agent_mode, m.agent_instructions
+            left(t.subject, 1000) AS subject, m.address, m.agent_mode,
+            left(m.agent_instructions, 8000) AS agent_instructions
      FROM draft_runs dr
      JOIN threads t ON t.id = dr.thread_id
      JOIN mailboxes m ON m.id = t.mailbox_id
@@ -413,7 +422,8 @@ export function buildDraftPrompt(
   },
   revision?: DraftRevision,
 ): { system: string; prompt: string } {
-  const { playbooks, attachments } = inputs;
+  const playbooks = inputs.playbooks.slice(0, 5);
+  const attachments = inputs.attachments.slice(0, 20);
   const instruction =
     revision?.instruction.trim().slice(0, MAX_REVISION_INSTRUCTION_CHARS) ?? "";
   const currentText =
@@ -436,11 +446,11 @@ export function buildDraftPrompt(
     ? playbooks
         .map((playbook) =>
           [
-            `<playbook id="${playbook.id}" name="${playbook.name}">`,
-            `WHEN TO USE:\n${playbook.when_to_use}`,
-            `REPLY INSTRUCTIONS:\n${playbook.instructions}`,
+            `<playbook id="${playbook.id}" name="${playbook.name.slice(0, 200)}">`,
+            `WHEN TO USE:\n${playbook.when_to_use.slice(0, 500)}`,
+            `REPLY INSTRUCTIONS:\n${playbook.instructions.slice(0, 2000)}`,
             playbook.example_reply
-              ? `EXAMPLE REPLY (use as guidance, not a script):\n${playbook.example_reply}`
+              ? `EXAMPLE REPLY (use as guidance, not a script):\n${playbook.example_reply.slice(0, 500)}`
               : null,
             "</playbook>",
           ]
@@ -454,7 +464,7 @@ export function buildDraftPrompt(
         "The latest customer email includes attachments that you have NOT inspected:",
         ...attachments.map(
           (item) =>
-            `- ${item.filename} (${item.content_type}, ${item.size} bytes)`,
+            `- ${item.filename.slice(0, 255)} (${item.content_type.slice(0, 127)}, ${item.size} bytes)`,
         ),
         "Do not claim to have read their contents. Ask the reviewer or customer when their contents are required.",
       ].join("\n")
@@ -463,7 +473,7 @@ export function buildDraftPrompt(
   const system = [
     `You are the email support agent for ${context.address}.`,
     "BASE INSTRUCTIONS — apply these to every reply:",
-    context.agent_instructions?.trim() ||
+    context.agent_instructions?.slice(0, 8000).trim() ||
       "Be helpful, concise and professional.",
     "AVAILABLE PLAYBOOKS — select at most one only when its WHEN TO USE clearly matches the latest customer request:",
     playbookContext,
@@ -484,7 +494,7 @@ export function buildDraftPrompt(
     .join("\n");
 
   const prompt = [
-    `Subject: ${context.subject}\n\n${inputs.transcript}`,
+    `Subject: ${context.subject.slice(0, 1000)}\n\n${inputs.transcript.slice(-MAX_TRANSCRIPT_CHARS)}`,
     revisionContext && currentText
       ? `=== REVIEWER'S CURRENT REPLY DRAFT ===\n${currentText}\n=== END OF CURRENT REPLY DRAFT ===`
       : null,

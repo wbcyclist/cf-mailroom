@@ -155,7 +155,8 @@ export interface ReplyTarget {
   expected_recipients: string[];
 }
 
-export type DraftRunStatus = "queued" | "generating" | "ready" | "failed" | "superseded" | "deferred";
+export const DRAFT_RUN_STATUSES = ["queued", "generating", "ready", "failed", "superseded", "deferred"] as const;
+export type DraftRunStatus = (typeof DRAFT_RUN_STATUSES)[number];
 
 export interface DraftRun {
   id: number;

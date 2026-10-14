@@ -13,7 +13,7 @@ export class UsageLimitError extends Error {
   }
 }
 
-function limit(value: string | undefined, fallback: number): number {
+export function usageLimit(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const parsed = Number(value);
   // Invalid settings stop dispatch instead of silently removing a cost guard.
@@ -22,7 +22,7 @@ function limit(value: string | undefined, fallback: number): number {
 
 export async function claimUsageBudget(
   db: Database,
-  resource: "queue" | "ai",
+  resource: "queue" | "ai" | "mcp",
   amount: number,
   dailyLimit: number,
   monthlyLimit: number,
@@ -52,11 +52,11 @@ export async function claimUsageBudget(
 
 export function claimQueueBudget(env: Env) {
   return claimUsageBudget(env.DB, "queue", QUEUE_OPERATIONS_PER_JOB,
-    limit(env.QUEUE_DAILY_OPERATION_LIMIT, 10_000),
-    limit(env.QUEUE_MONTHLY_OPERATION_LIMIT, 900_000));
+    usageLimit(env.QUEUE_DAILY_OPERATION_LIMIT, 10_000),
+    usageLimit(env.QUEUE_MONTHLY_OPERATION_LIMIT, 900_000));
 }
 
 export function claimAiBudget(env: Env) {
   return claimUsageBudget(env.DB, "ai", 1,
-    limit(env.AI_DAILY_CALL_LIMIT, 100), limit(env.AI_MONTHLY_CALL_LIMIT, 1_000));
+    usageLimit(env.AI_DAILY_CALL_LIMIT, 100), usageLimit(env.AI_MONTHLY_CALL_LIMIT, 1_000));
 }

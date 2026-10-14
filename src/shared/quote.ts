@@ -13,6 +13,14 @@ export function splitQuotedTail(body: string): { main: string; quoted: string | 
   const attributionRe =
     /^(-{3,}\s*Original Message\s*-{3,}|________________________________)/i;
 
+  // Find the trailing quote block once. Inline replies must not rescan each suffix.
+  let quoteStart = lines.length;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line && !line.startsWith(">")) break;
+    if (line.startsWith(">")) quoteStart = i;
+  }
+
   let cut = -1;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
@@ -21,12 +29,9 @@ export function splitQuotedTail(body: string): { main: string; quoted: string | 
       break;
     }
     // A run of quoted lines with nothing but quotes after it
-    if (line.startsWith(">")) {
-      const rest = lines.slice(i);
-      if (rest.every((l) => l.trim() === "" || l.trim().startsWith(">"))) {
-        cut = i;
-        break;
-      }
+    if (i === quoteStart) {
+      cut = i;
+      break;
     }
   }
   if (cut <= 0) return { main: body, quoted: null };

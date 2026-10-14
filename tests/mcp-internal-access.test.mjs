@@ -28,7 +28,11 @@ test("OAuth discovery advertises no dynamic registration", async () => {
 
 test("URL client IDs cannot cause metadata fetches or KV writes", async t => {
   t.mock.method(globalThis, "fetch", () => assert.fail("Unregistered client triggered a metadata fetch"));
-  const env = { OAUTH_KV: { async get() { return null; }, async put() { assert.fail("Unexpected registration"); } } };
+  const env = {
+    MCP_RATE_LIMITER: { async limit() { return { success: true }; } },
+    DB: { async transaction(work) { return work({ async query() { return { rows: [] }; } }); } },
+    OAUTH_KV: { async get() { return null; }, async put() { assert.fail("Unexpected registration"); } },
+  };
   const response = await handler(new Request("https://internal.example/mcp/oauth/token", {
     method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ client_id: "https://attacker.example/client.json", grant_type: "authorization_code", code: "invalid" }),
@@ -37,3 +41,35 @@ test("URL client IDs cannot cause metadata fetches or KV writes", async t => {
 });
 
 test.after(() => hook.deregister());
+
+test("OAuth rejects an oversized body before reading it or using KV", async () => {
+  let read = false;
+  const request = new Request('https://internal.example/mcp/oauth/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': '5242880' },
+    body: 'client_id=unknown',
+  });
+  request.formData = async () => { read = true; return new FormData(); };
+  const response = await handler(request, { OAUTH_KV: { get() { assert.fail('Unexpected KV read'); } } }, {});
+  assert.equal(response.status, 413);
+  assert.equal(read, false);
+});
+
+test("unauthenticated MCP uploads are cancelled without body reads or error logs", async t => {
+  t.mock.method(console, 'warn', () => assert.fail('Invalid credentials produced a warning'));
+  let pulls = 0, cancelled = false;
+  const stream = new ReadableStream({
+    pull(controller) { pulls++; controller.enqueue(new Uint8Array(1024)); },
+    cancel() { cancelled = true; },
+  }, { highWaterMark: 0 });
+  const env = {
+    MCP_RATE_LIMITER: { async limit() { return { success: true }; } },
+    DB: { async transaction(work) { return work({ async query() { return { rows: [] }; } }); } },
+    OAUTH_KV: { async get() { return null; } },
+  };
+  const response = await handler(new Request('https://internal.example/mcp', {
+    method: 'POST', body: stream, duplex: 'half',
+  }), env, {});
+  assert.equal(response.status, 401);
+  assert.equal(pulls, 0);
+  assert.equal(cancelled, true);
+});

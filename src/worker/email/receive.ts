@@ -1,4 +1,6 @@
 import { UsageLimitError } from "../usage-budget.ts";
+import { BodyLimitError, readLimitedStream } from "../../shared/stream-limit.ts";
+import { claimInboundBudget, checkInboundStorage, InboundLimitError } from "./receive-budget.ts";
 import { putFile } from "../files.ts";
 import { type SqlStatement, statement } from "../database.ts";
 import PostalMime, { type Attachment, type Email } from "postal-mime";
@@ -22,19 +24,31 @@ export async function receiveEmail(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<void> {
+  try {
+    await receiveWithinLimits(message, env, ctx);
+  } catch (error) {
+    if (!(error instanceof InboundLimitError) && !(error instanceof BodyLimitError)) throw error;
+    message.setReject(error.message);
+  }
+}
+
+async function receiveWithinLimits(message: ForwardableEmailMessage, env: Env, ctx: ExecutionContext): Promise<void> {
   const mailbox = await findMailbox(env, message.to.trim().toLowerCase());
   if (!mailbox) {
     message.setReject("Inbox not configured");
     return;
   }
 
-  if (message.rawSize > 25 * 1024 * 1024) {
+  if (!Number.isSafeInteger(message.rawSize) || message.rawSize <= 0 || message.rawSize > 25 * 1024 * 1024) {
     message.setReject("Message exceeds the 25 MiB storage limit");
     return;
   }
-  const rawBuffer = await new Response(message.raw).arrayBuffer();
+  await claimInboundBudget(env, message.rawSize);
+  const rawBytes = await readLimitedStream(message.raw, message.rawSize);
+  const rawBuffer = rawBytes.buffer as ArrayBuffer;
   const fingerprint = await rawFingerprint(rawBuffer);
   const parsed = await PostalMime.parse(rawBuffer);
+  if (parsed.attachments.length > 100) throw new InboundLimitError("Message exceeds the 100 attachment limit");
   const messageId = parsed.messageId ?? `<raw-${fingerprint}@mailroom.invalid>`;
 
   const subject = parsed.subject ?? "";
@@ -42,7 +56,7 @@ export async function receiveEmail(
   const sender = addressOf(parsed.from);
   const rawKey = `raw/${mailbox.id}/${fingerprint}.eml`;
   const now = new Date().toISOString();
-  const snippet = splitQuotedTail(textBody)
+  const snippet = splitQuotedTail(textBody.slice(0, 8000))
     .main.replace(/\s+/g, " ")
     .trim()
     .slice(0, 140);
@@ -65,6 +79,11 @@ export async function receiveEmail(
         duplicate: true,
         newThread: false,
       };
+    const encoder = new TextEncoder();
+    const storedBytes = rawBuffer.byteLength + encoder.encode(textBody).byteLength +
+      encoder.encode(parsed.html ?? "").byteLength +
+      parsed.attachments.reduce((size, attachment) => size + attachmentBytes(attachment.content).byteLength, 0);
+    await checkInboundStorage(db, env, storedBytes);
     const txEnv = { ...env, DB: db };
     const existingThreadId = await resolveThread(
       txEnv,
@@ -323,11 +342,35 @@ function extractMessageIds(parsed: Email): string[] {
   return [...new Set(raw.match(/<[^<>\s]+>/g) ?? [])].slice(-100);
 }
 
-function htmlToText(html: string): string {
-  return html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
-    .replace(/<[^>]+>/g, " ")
+export function htmlToText(html: string): string {
+  const parts: string[] = [];
+  const closingStyle = /<\/style\s*>/gi;
+  const closingScript = /<\/script\s*>/gi;
+  let cursor = 0;
+  // Each search advances past the inspected input. Repeated unclosed tags must
+  // not cause regex scans of every remaining suffix of an untrusted message.
+  while (cursor < html.length) {
+    const start = html.indexOf("<", cursor);
+    if (start < 0) {
+      parts.push(html.slice(cursor));
+      break;
+    }
+    parts.push(html.slice(cursor, start));
+    const end = html.indexOf(">", start + 1);
+    if (end < 0) {
+      parts.push(html.slice(start));
+      break;
+    }
+    const ignoredTag = /^(style|script)(?:\s|$)/i.exec(html.slice(start + 1, end).trim())?.[1].toLowerCase();
+    cursor = end + 1;
+    if (ignoredTag) {
+      const closing = ignoredTag === "style" ? closingStyle : closingScript;
+      closing.lastIndex = cursor;
+      cursor = closing.exec(html) ? closing.lastIndex : html.length;
+    }
+    parts.push(" ");
+  }
+  return parts.join("")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")

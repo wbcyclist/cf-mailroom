@@ -12,6 +12,13 @@
   // Preserve per-instance WEB_ACCESS_TEAM_DOMAIN and WEB_ACCESS_AUD from
   // Worker Settings > Variables and Secrets. Missing values deny all API access.
   "keep_vars": true,
+  "ratelimits": [
+    {
+      "name": "MCP_RATE_LIMITER",
+      "namespace_id": "187421",
+      "simple": { "limit": 60, "period": 60 }
+    }
+  ],
   "assets": {
     "not_found_handling": "single-page-application",
     // /mcp (including /mcp/oauth/*) and /.well-known/* serve MCP and OAuth;

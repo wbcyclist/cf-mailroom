@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Attachment } from "../../shared/types";
-import { buildEmailHtmlDocument } from "../email-html";
+import { buildEmailHtmlDocument, inlineImageCandidates } from "../email-html";
+import { loadInlineImages, type InlineImage } from "../email-images";
 
 const MIN_EMAIL_HEIGHT = 80;
 const MAX_EMAIL_HEIGHT = 20_000;
@@ -16,9 +17,26 @@ export function EmailHtmlBody({
 }) {
   const frameRef = useRef<HTMLIFrameElement>(null);
   const resizeObserverRef = useRef<ResizeObserver | null>(null);
+  const [imageSources, setImageSources] = useState<ReadonlyMap<number, string>>(new Map());
+  const imageKey = useMemo(() => JSON.stringify(inlineImageCandidates(html, attachments)), [html, attachments]);
+  useEffect(() => {
+    const controller = new AbortController();
+    const sources = new Map<number, string>();
+    setImageSources(new Map());
+    void loadInlineImages(JSON.parse(imageKey) as InlineImage[], controller.signal, (id, url) => {
+      if (controller.signal.aborted) URL.revokeObjectURL(url);
+      else sources.set(id, url);
+    }).then(() => {
+      if (!controller.signal.aborted) setImageSources(new Map(sources));
+    });
+    return () => {
+      controller.abort();
+      for (const url of sources.values()) URL.revokeObjectURL(url);
+    };
+  }, [imageKey]);
   const sourceDocument = useMemo(
-    () => buildEmailHtmlDocument(html, attachments),
-    [attachments, html],
+    () => buildEmailHtmlDocument(html, attachments, imageSources),
+    [attachments, html, imageSources],
   );
 
   useEffect(
@@ -53,13 +71,16 @@ export function EmailHtmlBody({
   };
 
   return (
-    <iframe
-      ref={frameRef}
-      title={`Email from ${sender}`}
-      srcDoc={sourceDocument}
-      sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
-      onLoad={fitContent}
-      className="mt-3 block min-h-20 w-full border-0 bg-white"
-    />
+    <>
+      <p className="mt-3 text-xs text-muted-foreground">External images are blocked.</p>
+      <iframe
+        ref={frameRef}
+        title={`Email from ${sender}`}
+        srcDoc={sourceDocument}
+        sandbox="allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-downloads"
+        onLoad={fitContent}
+        className="mt-3 block min-h-20 w-full border-0 bg-white"
+      />
+    </>
   );
 }

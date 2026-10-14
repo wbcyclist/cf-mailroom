@@ -28,7 +28,8 @@ export async function labelNewThread(
     text_body: string | null;
     mailbox_id: number;
   }>(
-    `SELECT msg.subject, msg.from_address, msg.from_name, msg.text_body,
+    `SELECT left(msg.subject, 1000) AS subject, left(msg.from_address, 500) AS from_address,
+            left(msg.from_name, 500) AS from_name, left(msg.text_body, 8000) AS text_body,
             t.mailbox_id
      FROM messages msg
      JOIN threads t ON t.id = msg.thread_id
@@ -38,7 +39,7 @@ export async function labelNewThread(
   if (!message) return;
 
   const { rows: labels } = await env.DB.query<LabelRule>(
-    "SELECT id, name, condition FROM labels WHERE mailbox_id = $1 ORDER BY id LIMIT 20",
+    "SELECT id, left(name, 200) AS name, left(condition, 1000) AS condition FROM labels WHERE mailbox_id = $1 ORDER BY id LIMIT 20",
     [message.mailbox_id],
   );
   if (labels.length === 0) return;

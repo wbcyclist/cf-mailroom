@@ -13,8 +13,9 @@ import {
   MCP_TOKEN_ENDPOINT,
 } from "./route.ts";
 import { createMailroomServer, type McpEnv } from "./server.ts";
+import { guardMcpRequest, limitMcpResourceBody, type McpRequestEnv } from "./request-guard.ts";
 
-export interface McpWorkerEnv extends McpEnv, AuthorizationEnv {
+export interface McpWorkerEnv extends McpEnv, AuthorizationEnv, McpRequestEnv {
   OAUTH_KV: KVNamespace;
   OAUTH_PROVIDER: OAuthHelpers;
   MCP_SEND_ENABLED?: string;
@@ -62,6 +63,9 @@ class McpApiHandler extends WorkerEntrypoint<McpWorkerEnv, OAuthGrantProps> {
         summary.scope.includes(MCP_SEND_SCOPE) &&
         this.env.MCP_SEND_ENABLED !== "false",
     };
+    const limited = await limitMcpResourceBody(request);
+    if (limited instanceof Response) return limited;
+    request = limited;
     const hostname = new URL(origin).hostname;
     const handler = createMcpHandler(
       () => createMailroomServer({ ...this.env, WEB_APP_URL: origin }, identity),
@@ -131,6 +135,7 @@ function oauthError(
 // The Worker can be reached on workers.dev and custom domains. Each origin is
 // its own issuer and resource, so tokens stay bound to the hostname that issued them.
 const oauthProviders = new Map<string, OAuthProvider<McpWorkerEnv>>();
+let lastServerErrorAt = 0;
 
 function getOAuthProvider(origin: string, web: WebHandler): OAuthProvider<McpWorkerEnv> {
   const existing = oauthProviders.get(origin);
@@ -173,6 +178,9 @@ function getOAuthProvider(origin: string, web: WebHandler): OAuthProvider<McpWor
     };
   },
   onError({ status, code, internal }) {
+    // Invalid credentials are expected on a public endpoint. Do not log each probe.
+    if (status < 500 || Date.now() - lastServerErrorAt < 60_000) return;
+    lastServerErrorAt = Date.now();
     console.warn("MCP OAuth error", {
       status,
       code,
@@ -190,11 +198,18 @@ function getOAuthProvider(origin: string, web: WebHandler): OAuthProvider<McpWor
  * from the same Worker as the web app. Everything else goes to `web`.
  */
 export function withMcp(web: WebHandler) {
-  return (request: Request, env: Omit<McpWorkerEnv, "OAUTH_PROVIDER">, ctx: ExecutionContext) => {
+  return async (request: Request, env: Omit<McpWorkerEnv, "OAUTH_PROVIDER">, ctx: ExecutionContext) => {
     const url = new URL(request.url);
     if (isRejectedMcpRouteLookalike(url.pathname)) {
       return new Response("Not found", { status: 404 });
     }
-    return getOAuthProvider(url.origin, web).fetch(request, env as McpWorkerEnv, ctx);
+    if (url.pathname === MCP_ROUTE || url.pathname === MCP_TOKEN_ENDPOINT) {
+      const guarded = await guardMcpRequest(request, env);
+      if (guarded instanceof Response) return guarded;
+      request = guarded;
+    }
+    const response = await getOAuthProvider(url.origin, web).fetch(request, env as McpWorkerEnv, ctx);
+    if (response.status >= 400 && !request.bodyUsed) void request.body?.cancel().catch(() => {});
+    return response;
   };
 }

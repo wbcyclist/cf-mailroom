@@ -68,6 +68,12 @@ export async function enqueueDraftRun(
 
 /** One bounded recovery pass. No queue retry is used to wait for a new day. */
 export async function resumeDeferredDraftRuns(env: Env) {
+  await env.DB.query(
+    `DELETE FROM inbound_usage WHERE period IN (
+       SELECT period FROM inbound_usage WHERE period < to_char(now() AT TIME ZONE 'UTC' - interval '2 days', 'YYYY-MM-DD')
+       ORDER BY period LIMIT 200
+     )`,
+  );
   await expireDraftRuns(env);
   const { rows } = await env.DB.query<{ thread_id: number; inbound_message_id: number }>(
     `SELECT dr.thread_id, dr.inbound_message_id FROM draft_runs dr

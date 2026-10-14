@@ -67,3 +67,14 @@ test("parses the playbook header out of model output", () => {
     playbook,
   });
 });
+
+test("large instructions and history leave room within the provider input limit", () => {
+  const large = "x".repeat(100_000);
+  const prompt = buildDraftPrompt({ ...context, subject: large, agent_instructions: large }, {
+    transcript: large + "LATEST CUSTOMER MESSAGE",
+    playbooks: Array.from({ length: 20 }, (_, id) => ({ id, name: large, when_to_use: large, instructions: large, example_reply: large })),
+    attachments: Array.from({ length: 100 }, () => ({ filename: large, content_type: large, size: 1024 })),
+  }, { instruction: large, currentText: large });
+  assert.ok(prompt.system.length + prompt.prompt.length < 128_000);
+  assert.match(prompt.prompt, /LATEST CUSTOMER MESSAGE/);
+});
