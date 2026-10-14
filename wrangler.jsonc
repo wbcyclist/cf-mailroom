@@ -80,5 +80,9 @@
   "observability": {
     "enabled": true
   },
+  "vars": {
+    "WEB_ACCESS_AUD": "ea178003b02692001ca72aeef91c789e0638c4b2ddd6cac587609b80ee39e213",
+    "WEB_ACCESS_TEAM_DOMAIN": "https://myaitoyapi-pages.cloudflareaccess.com"
+  },
   "triggers": { "crons": ["*/10 * * * *"] }
 }
