@@ -1,7 +1,9 @@
 # PostgreSQL local credentials are configured in wrangler.dev.jsonc.
 # Production migration credentials belong in .env or the build secret DATABASE_URL.
 # Do not copy DATABASE_URL into Worker runtime vars.
-# No additional runtime secrets are needed for local development.
+# Optional external AI: select the API type, Base URL, and model in Settings.
+# Restart Vite after setting this secret in .dev.vars.
+# AI_API_KEY=
 # Optional browser notifications: copy to .dev.vars, uncomment the lines below,
 # and fill in a matching key pair from `npm run vapid:generate`.
 # For production, add these as Worker secrets; see docs/deployment.md.

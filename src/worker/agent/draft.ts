@@ -1,7 +1,6 @@
 import { statement } from "../database.ts";
-import { generateText } from "ai";
-import { createWorkersAI } from "workers-ai-provider";
-import { getAiModel } from "../ai-model.ts";
+import { AiRequestError, generateAiText } from "../ai.ts";
+import { AiConfigurationError } from "../ai-model.ts";
 import type { Draft } from "../../shared/types.ts";
 
 const MAX_CONTEXT_MESSAGES = 12;
@@ -66,7 +65,7 @@ export async function processDraftRun(env: Env, runId: number): Promise<void> {
     `UPDATE draft_runs
      SET status = 'generating', attempt_count = attempt_count + 1,
          error = NULL, started_at = now(), finished_at = NULL
-     WHERE id = $1 AND status IN ('queued', 'failed')
+     WHERE id = $1 AND status = 'queued'
      RETURNING id`,
     [runId],
   );
@@ -145,6 +144,9 @@ export async function processDraftRun(env: Env, runId: number): Promise<void> {
        WHERE id = $2`,
       [message.slice(0, 2000), runId],
     );
+    // Failed model calls require an explicit retry. A queue redelivery must
+    // not repeat a paid request, including one that timed out after dispatch.
+    if (error instanceof AiConfigurationError || error instanceof AiRequestError) return;
     throw error;
   }
 }
@@ -304,11 +306,9 @@ async function generateAgentReply(
   inputs: DraftInputs,
   revision?: DraftRevision,
 ): Promise<GeneratedReply> {
-  const model = await getAiModel(env);
-  const workersai = createWorkersAI({ binding: env.AI });
-  const { text } = await generateText({
-    model: workersai(model),
+  const { text, model } = await generateAiText(env, {
     ...buildDraftPrompt(context, inputs, revision),
+    maxOutputTokens: 4096,
   });
   const parsed = parseDraftOutput(text, inputs.playbooks);
   if (!parsed.body) throw new Error(`${model} returned an empty draft`);

@@ -21,7 +21,8 @@ interface WorkerEnv {
   WEB_ACCESS_AUD?: string;
   HYPERDRIVE: Hyperdrive;
   EMAIL: OutboundEmailBinding;
-  AI: Ai;
+  AI?: Ai;
+  AI_API_KEY?: string;
   DRAFT_QUEUE: Queue<{ runId: number }>;
   OAUTH_KV: KVNamespace;
   MCP_SEND_ENABLED?: string;

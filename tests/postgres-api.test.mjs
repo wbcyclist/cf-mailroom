@@ -74,6 +74,159 @@ const mail = (
 ) =>
   `From: Customer <customer@example.net>\r\nTo: support@example.com\r\nMessage-ID: <${id}@example.net>\r\nSubject: ${subject}\r\n${headers}\r\n${body}`;
 
+const externalAi = (provider = "openai-compatible") => ({
+  ai_provider: provider, ai_base_url: "https://ai.example/v1", ai_model: "test-model",
+});
+
+test("AI is disabled by default; settings round-trip without exposing the secret", async (t) => {
+  const f = await fixture(t);
+  const initial = await f.request("/settings/general").then((r) => r.json());
+  assert.equal(initial.ai_provider, "disabled");
+  assert.equal(initial.ai_workers_available, false);
+  assert.equal(initial.ai_external_available, false);
+  f.env.AI_API_KEY = "secret-do-not-expose";
+  for (const config of [
+    externalAi(), externalAi("openai-responses"),
+    { ai_provider: "workers-ai", ai_model: null, ai_base_url: null },
+    { ai_provider: "disabled", ai_model: null, ai_base_url: null },
+  ]) {
+    const response = await f.request("/settings/general", "PATCH", config);
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, ...config });
+    const saved = await f.request("/settings/general").then((r) => r.json());
+    for (const key of Object.keys(config)) assert.equal(saved[key], config[key]);
+    assert.equal(saved.ai_external_available, true);
+    assert.ok(!JSON.stringify(saved).includes(f.env.AI_API_KEY));
+  }
+  for (const config of [{}, { ai_provider: "other" }, { ...externalAi(), ai_base_url: "http://localhost" }]) {
+    assert.equal((await f.request("/settings/general", "PATCH", config)).status, 400);
+  }
+  assert.equal((await f.db.one("SELECT ai_provider FROM global_settings")).ai_provider, "disabled");
+});
+
+test("disabled or unconfigured AI stores mail without calls or queued drafts", async (t) => {
+  const f = await fixture(t);
+  t.mock.method(globalThis, "fetch", () => assert.fail("Unexpected paid call"));
+  await f.db.query("UPDATE mailboxes SET agent_mode = 'draft'");
+  await f.db.query("INSERT INTO labels (mailbox_id, name, condition) VALUES ($1, 'invoice', 'Invoice request')", [f.inbox.id]);
+  for (const [i, config] of [
+    { ai_provider: "disabled" }, externalAi(), { ai_provider: "workers-ai" },
+  ].entries()) {
+    assert.equal((await f.request("/settings/general", "PATCH", config)).status, 200);
+    await f.deliver(mail(`no-ai-${i}`, `Subject ${i}`));
+    const msg = await f.db.one("SELECT thread_id FROM messages ORDER BY id DESC LIMIT 1");
+    assert.equal((await f.request(`/threads/${msg.thread_id}/draft`, "POST")).status, 503);
+    assert.equal((await f.request(`/threads/${msg.thread_id}/draft/revise`, "POST", { instruction: "Rewrite" })).status, 503);
+  }
+  assert.equal((await f.db.one("SELECT count(*) AS n FROM messages")).n, 3);
+  assert.equal((await f.db.one("SELECT count(*) AS n FROM draft_runs")).n, 0);
+  assert.deepEqual(f.jobs, []);
+});
+
+for (const provider of ["openai-compatible", "openai-responses"]) {
+  test(`${provider} labels, drafts, and revises through PostgreSQL without Workers AI`, async (t) => {
+    const f = await fixture(t);
+    f.env.AI_API_KEY = "test-secret";
+    await f.request("/settings/general", "PATCH", externalAi(provider));
+    await f.db.query("UPDATE mailboxes SET agent_mode = 'draft'");
+    const label = await f.db.one("INSERT INTO labels (mailbox_id, name, condition) VALUES ($1, 'invoice', 'Invoice request') RETURNING id", [f.inbox.id]);
+    let calls = 0;
+    t.mock.method(globalThis, "fetch", async (url, options) => {
+      calls++;
+      const body = JSON.parse(options.body);
+      assert.equal(body.model, "test-model");
+      assert.equal(body.store, false);
+      const instructions = provider === "openai-responses" ? body.instructions : body.messages[0].content;
+      const text = instructions.startsWith("Classify")
+        ? JSON.stringify({ answers: { [`label_${label.id}`]: { noul: 0.9 }, label_999: { noul: 1 } } })
+        : "PLAYBOOK: NONE\nREPLY:\nPlease send your order number.";
+      return Response.json(provider === "openai-responses"
+        ? { status: "completed", output: [{ type: "message", status: "completed", role: "assistant", content: [{ type: "output_text", text }] }] }
+        : { choices: [{ finish_reason: "stop", message: { content: text } }] });
+    });
+    await f.deliver(mail(`external-${provider}`));
+    assert.equal(calls, 1);
+    assert.equal(f.jobs.length, 1);
+    assert.equal((await f.db.one("SELECT count(*) AS n FROM thread_labels")).n, 1);
+    await processDraftRun(f.env, f.jobs[0].runId);
+    assert.equal(calls, 2);
+    const run = await f.db.one("SELECT * FROM draft_runs");
+    assert.equal(run.status, "ready");
+    const draft = await f.db.one("SELECT * FROM drafts WHERE id = $1", [run.draft_id]);
+    assert.equal(draft.text_body, "Please send your order number.");
+    assert.match(draft.agent_notes, /test-model/);
+    await processDraftRun(f.env, run.id);
+    assert.equal(calls, 2);
+    assert.equal((await f.request(`/threads/${run.thread_id}/draft/revise`, "POST", { instruction: "Shorter" })).status, 200);
+    assert.equal(calls, 3);
+  });
+}
+
+test("provider failure is safe to redeliver; only an explicit retry can call AI again", async (t) => {
+  const f = await fixture(t);
+  f.env.AI_API_KEY = "secret-do-not-log";
+  await f.request("/settings/general", "PATCH", externalAi());
+  await f.db.query("UPDATE mailboxes SET agent_mode = 'draft'");
+  await f.deliver(mail("failed-ai"));
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    return new Response("secret-do-not-log private email", { status: 401 });
+  });
+  const id = f.jobs[0].runId;
+  await processDraftRun(f.env, id);
+  await processDraftRun(f.env, id);
+  assert.equal(calls, 1);
+  const run = await f.db.one("SELECT * FROM draft_runs WHERE id = $1", [id]);
+  assert.equal(run.status, "failed");
+  assert.equal(run.error, "AI request failed (HTTP 401)");
+  assert.equal((await f.db.one("SELECT count(*) AS n FROM drafts")).n, 0);
+  await f.deliver(mail("failed-ai"));
+  assert.equal(f.jobs.length, 1, "Duplicate mail must not retry a failed model call");
+  assert.equal((await f.request(`/draft-runs/${id}/retry`, "POST")).status, 200);
+  await processDraftRun(f.env, id);
+  assert.equal(calls, 2);
+  await f.request("/settings/general", "PATCH", { ai_provider: "disabled" });
+  assert.equal((await f.request(`/draft-runs/${id}/retry`, "POST")).status, 503);
+});
+
+test("disabling AI stops already queued jobs without discarding manual email features", async (t) => {
+  const f = await fixture(t);
+  f.env.AI_API_KEY = "test-secret";
+  await f.request("/settings/general", "PATCH", externalAi());
+  await f.db.query("UPDATE mailboxes SET agent_mode = 'draft'");
+  await f.deliver(mail("disable-queued"));
+  await f.request("/settings/general", "PATCH", { ai_provider: "disabled" });
+  t.mock.method(globalThis, "fetch", () => assert.fail("Unexpected paid call"));
+  await processDraftRun(f.env, f.jobs[0].runId);
+  const run = await f.db.one("SELECT * FROM draft_runs");
+  assert.equal(run.status, "failed");
+  assert.match(run.error, /AI is disabled/);
+  assert.equal((await f.request(`/threads/${run.thread_id}`)).status, 200);
+});
+
+test("concurrent draft enqueue and delivery claim one paid request", async (t) => {
+  const f = await fixture(t);
+  await f.deliver(mail("concurrent-ai"));
+  f.env.AI_API_KEY = "test-secret";
+  await f.request("/settings/general", "PATCH", externalAi());
+  await f.db.query("UPDATE mailboxes SET agent_mode = 'draft'");
+  const msg = await f.db.one("SELECT id, thread_id FROM messages");
+  const ids = await Promise.all(Array.from({ length: 8 }, () => enqueueDraftRun(f.env, msg.thread_id, msg.id)));
+  assert.equal(new Set(ids).size, 1);
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    calls++;
+    // A duplicate arriving during generation must not reopen the claimed run.
+    await enqueueDraftRun(f.env, msg.thread_id, msg.id, { retryFailed: true });
+    assert.equal((await f.db.one("SELECT status FROM draft_runs")).status, "generating");
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "PLAYBOOK: NONE\nREPLY:\nThanks." } }] });
+  });
+  await Promise.all(f.jobs.map((job) => processDraftRun(f.env, job.runId)));
+  assert.equal(calls, 1);
+  assert.equal((await f.db.one("SELECT count(*) AS n FROM drafts")).n, 1);
+});
+
 test("inbound MIME, attachments, deduplication, threading and downloads use PostgreSQL", async (t) => {
   const f = await fixture(t);
   const raw = await readFile(
@@ -228,6 +381,7 @@ test("settings, domains, inboxes, playbooks and draft queues use native PostgreS
   assert.equal(
     (
       await f.request("/settings/general", "PATCH", {
+        ai_provider: "workers-ai",
         ai_model: "openai/gpt-6-luna",
       })
     ).status,
@@ -283,6 +437,7 @@ test("settings, domains, inboxes, playbooks and draft queues use native PostgreS
     mail("draft", "Automated", "Auto-Submitted: auto-generated\r\n"),
   );
   const msg = await f.db.one("SELECT id, thread_id FROM messages");
+  f.env.AI = { run() { assert.fail("Unexpected paid call"); } };
   const run = await enqueueDraftRun(f.env, msg.thread_id, msg.id);
   assert.deepEqual(f.jobs, [{ runId: run }]);
   // An automated message must be rejected before invoking the paid model.

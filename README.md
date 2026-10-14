@@ -31,6 +31,8 @@ Mail metadata, raw MIME, and attachments are stored in PostgreSQL.
 
 **AI assistance**
 
+- **Optional providers**: Workers AI, an OpenAI-compatible Chat Completions API, or an OpenAI Responses API. AI is disabled by default. Configure the provider, API root, and model in Settings → General; external credentials stay in a Worker secret.
+
 - **Reply drafts**: per-Inbox drafting guided by custom instructions and playbooks. Every draft waits for your approval before it is sent.
 - **Automatic labels**: natural-language rules that tag incoming mail.
 - **MCP for external agents**: agents can read conversations, reply, and send new mail through scoped OAuth access, with idempotent sends and a daily limit.
@@ -86,16 +88,18 @@ new inbound Message ──► Web Push ──► subscribed browsers
   sender's `Reply-To` address.
 - **Auto labels**: each Inbox can define labels (e.g. `guest-post`,
   `link-exchange`) with a natural-language match condition. New inbound mail is
-  evaluated once with the `typesafe/jev` model and tagged with every matching
-  label; replies are never labeled.
+  evaluated once when AI is enabled, using `typesafe/jev` for Workers AI or the
+  configured external model. Matching labels are added; replies are never labeled.
 
 ### AI drafting
 
 - **Off by default.** Each Inbox has its own instructions and playbooks.
-  Drafting starts only after you enable **Draft replies to new messages**; it
+  Select a configured AI provider in **Settings → General**, then enable
+  **Draft replies to new messages** for the Inbox. It
   writes a draft for approval and never sends on its own.
 - **Reliable drafting**: each latest inbound Message gets a retryable Draft Run
-  on Cloudflare Queues. Stale runs cannot overwrite a newer Agent Draft.
+  on Cloudflare Queues. Failed model calls require an explicit retry; queue
+  redelivery does not repeat them. Stale runs cannot overwrite a newer Agent Draft.
 - **Loop prevention**: auto-submitted senders (RFC 3834, `Precedence: bulk`,
   list mail) are flagged and never receive automated replies.
 
@@ -186,7 +190,9 @@ npm run dev
 
 Local development uses `wrangler.dev.jsonc`, which omits the AI and outbound
 email bindings. Inbound handling, the API, and the web UI remain available;
-sending a real reply requires the deployed Worker.
+sending a real reply requires the deployed Worker. To use external AI locally,
+add `AI_API_KEY` to `.dev.vars`, restart Vite, and select the provider and model in
+Settings → General. See [AI setup](docs/deployment.md#optional-configure-ai).
 
 Tests use isolated temporary PostgreSQL schemas. Set `TEST_DATABASE_URL` to use
 a separate test server. They do not reset the development database. The local
@@ -239,7 +245,7 @@ docs/         Deployment guide
 
 ## Roadmap
 
-- [x] Triage: per-inbox auto labels via `typesafe/jev` classification on new inbound mail
+- [x] Triage: per-inbox auto labels through the selected AI provider on new inbound mail
 - [x] Full-text search in the conversation list (`/api/search` on `messages_fts`)
 - [ ] External tools for the draft agent (for example Stripe or product databases)
 - [ ] Delivery and bounce status inside the Conversation (available today in Cloudflare Email Logs)

@@ -1,7 +1,7 @@
 # Verification
 
 - `npm run check` (tsc) and `npm test` (node --test, strip-types only: avoid TS parameter properties/enums in modules imported by tests).
-- Local UI: `npx vite --port <free port>` (5173 may be taken by another project). `wrangler.dev.jsonc` has no `AI` binding, so AI draft calls fail locally; mock `fetch` in the page to check success states.
+- Local UI: `npx vite --port <free port>` (5173 may be taken by another project). `wrangler.dev.jsonc` has no `AI` binding. AI is disabled by default; external AI works locally with `AI_API_KEY` in `.dev.vars` and provider settings in the UI. Mock provider requests in tests to avoid paid calls.
 
 # Release process
 

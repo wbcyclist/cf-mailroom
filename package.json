@@ -22,13 +22,13 @@
   "cloudflare": {
     "bindings": {
       "AI": {
-        "description": "Workers AI generates drafts and classifies inbound email. Usage is billed to your Cloudflare account."
+        "description": "Optional: Workers AI generates drafts and classifies inbound email when selected. External AI providers do not need this binding."
       },
       "EMAIL": {
         "description": "Outbound email. Enable Email Sending and onboard your sender domain after deployment; arbitrary recipients require Workers Paid."
       },
       "DRAFT_QUEUE": {
-        "description": "Runs AI drafts asynchronously, with automatic retries. Use a queue dedicated to this instance."
+        "description": "Runs AI drafts asynchronously. Failed model calls require an explicit retry. Use a queue dedicated to this instance."
       },
       "DRAFT_DLQ": {
         "description": "Keeps failed draft jobs after retries are exhausted. Use a separate queue dedicated to this instance."

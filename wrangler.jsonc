@@ -39,9 +39,8 @@
       "binding": "OAUTH_KV"
     }
   ],
-  "ai": {
-    "binding": "AI"
-  },
+  // Optional Workers AI: add "ai": { "binding": "AI" } to use that provider.
+  // External providers need only the AI_API_KEY Worker secret.
   "send_email": [
     {
       // Sender domains must be onboarded to Email Service (dashboard > Email Service).

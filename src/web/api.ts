@@ -1,3 +1,5 @@
+import type { AiSettings } from "../shared/ai-model";
+
 import type {
   BrowserPushSubscription,
   ComposeAttemptResult,
@@ -89,11 +91,11 @@ export async function composeEmail(input: {
 export const fetchGeneralSettings = () =>
   request<GeneralSettings>("/settings/general");
 
-export const updateAiModel = (aiModel: string | null) =>
-  request<{ ok: true; ai_model: string | null }>("/settings/general", {
+export const updateAiSettings = (settings: AiSettings) =>
+  request<{ ok: true } & AiSettings>("/settings/general", {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ai_model: aiModel }),
+    body: JSON.stringify(settings),
   });
 
 export const enableBrowserNotifications = (subscription: BrowserPushSubscription) =>

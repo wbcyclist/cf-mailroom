@@ -4,7 +4,8 @@ This version uses a fresh PostgreSQL database. The runtime path is
 **Cloudflare Worker → Hyperdrive → VPS PostgreSQL**. All former D1 business
 records, raw MIME, and attachments use PostgreSQL; no D1 or R2 binding is needed.
 OAuth clients, grants, and tokens still use `OAUTH_KV`, as required by the OAuth
-provider. Queues, Workers AI, Email Service, and Access remain on Cloudflare.
+provider. Queues, Email Service, and Access remain on Cloudflare. Workers AI is
+optional; external AI providers can handle both drafts and labels.
 
 ## Before you start
 
@@ -117,10 +118,11 @@ credentials. If the database is private, run migrations from a trusted network
 before release and configure the build deploy command as
 `node scripts/check-database-config.mjs && npm run build && node scripts/deploy.mjs`.
 
-Review the bindings: `HYPERDRIVE`, `AI`, `EMAIL`, `DRAFT_QUEUE`, `DRAFT_DLQ`, and
+Review the bindings: `HYPERDRIVE`, `EMAIL`, `DRAFT_QUEUE`, `DRAFT_DLQ`, and
 `OAUTH_KV`. The queue consumer and dead-letter names must match their producers.
 The ID-less OAuth KV binding is provisioned by Wrangler. Outbound sending also
-requires domain onboarding; a binding alone does not authorize a sender.
+requires domain onboarding; a binding alone does not authorize a sender. The
+`AI` binding is optional and absent from the default configuration.
 
 Push the completed configuration to trigger the first build. The default deploy
 command builds the app, applies pending PostgreSQL migrations, then uploads the
@@ -187,6 +189,80 @@ Do not deploy `wrangler.dev.jsonc` or expose the local dev server publicly.
    reply and verify delivery back to that mailbox.
 
 Repeat for additional addresses or domains; they can share the same Worker.
+
+## Optional: configure AI
+
+AI is disabled by default. In **Settings → General → AI**, select a provider,
+enter its settings, and save. This global setting controls drafts, revisions,
+and automatic labels. Inbox drafting switches still control automatic drafts.
+Manual reading, writing, attachments, and MCP tools do not need an AI provider.
+
+| Provider | Settings | Runtime requirement |
+| --- | --- | --- |
+| Disabled | None | No AI calls or new draft jobs |
+| Cloudflare Workers AI | Optional draft model; empty uses `openai/gpt-6-luna` | `AI` binding |
+| OpenAI-compatible · Chat Completions | HTTPS API root and model ID | `AI_API_KEY` Worker secret |
+| OpenAI Responses API | HTTPS API root and model ID | `AI_API_KEY` Worker secret |
+
+### External API
+
+1. Add `AI_API_KEY` under **Worker → Settings → Variables and Secrets**, with type
+   **Secret**. This is a runtime secret, not a build variable. It is used as a
+   Bearer token. Do not put it in PostgreSQL, `wrangler.jsonc`, a URL, or `VITE_*`.
+2. Select the API type. For OpenAI, use `https://api.openai.com/v1` as the Base URL.
+   For another provider, use its API root, including any required version prefix.
+   Do not include `/chat/completions` or `/responses`; Mailroom appends that path.
+3. Enter an exact model ID supported by that endpoint. The same model generates
+   drafts and classifies labels. There is no automatic fallback to Workers AI.
+4. Save, then enable drafting for the required Inboxes. Creating label rules
+   enables classification of new conversations, even if inbox drafting is off.
+
+The Base URL must use a public HTTPS hostname. URL credentials, query strings,
+fragments, IP literals, and redirects are rejected. The Worker also uses
+`global_fetch_strictly_public` to block private network destinations. Changing
+providers does not change the secret; replace it when the new provider requires
+a different key. Only key availability is returned to the settings page.
+
+Chat Completions sends `messages` and `max_tokens`. Use a model that accepts those
+fields; models that require Responses should use the Responses option instead.
+Responses sends `instructions`, `input`, and `max_output_tokens`, and reads typed
+`output` items. Both requests use `store: false`; the provider must honor it.
+See the [OpenAI API migration guide](https://developers.openai.com/api/docs/guides/migrate-to-responses).
+
+For local development, set `AI_API_KEY` in the ignored `.dev.vars` file and restart
+Vite. The local configuration does not require a Workers AI binding.
+
+### Workers AI
+
+Add the following top-level property to `wrangler.jsonc`, then release through
+the normal Git build. Select **Cloudflare Workers AI** after deployment:
+
+```json
+"ai": { "binding": "AI" }
+```
+
+Workers AI uses the selected text model for drafts and `typesafe/jev` for labels.
+Missing bindings or secrets produce a setup message and prevent AI calls.
+
+### Request limits and failures
+
+- Text calls have a 60-second timeout, at most 128,000 input characters, and at
+  most 4,096 output tokens for drafts or 2,048 for external label classification.
+  External response bodies are limited to 256,000 bytes. Truncated, refused, or
+  malformed output is not saved as a draft or as labels.
+- Each new conversation evaluates at most 20 label rules and 8,000 body characters.
+  Label failures do not block receipt of mail and are not retried automatically.
+- Model calls have no automatic retries. Failed draft jobs require the **Retry**
+  action; repeating a queue delivery does not call the model again. Fix a missing
+  key, unavailable model, or provider error before retrying.
+- Setting the provider to **Disabled** stops new AI work, including queued drafts
+  that have not called a model yet. A request already in progress may still finish
+  and be billed. Existing labels and drafts remain available.
+
+These are per-request limits, not a daily or monthly spending cap. Each new
+conversation can trigger a label call and each eligible inbound message can
+trigger a draft call. External AI usage is billed by that provider; Worker and
+Queue usage still belongs to Cloudflare.
 
 ## Optional: connect an AI agent over MCP
 
@@ -294,6 +370,9 @@ Keep your own values when conflicts touch instance-specific files:
 - **Hyperdrive connection fails:** replace the all-zero ID, verify origin
   credentials and TLS, and confirm query caching is disabled. Local development
   uses the direct local URL instead of the production Hyperdrive config.
+- **AI does not run:** select a provider in Settings → General, check its model
+  and Base URL, and add the required `AI` binding or `AI_API_KEY` secret. A failed
+  draft needs an explicit retry after the configuration is fixed.
 - **Missing queue / dead-letter queue:** check both queues exist and the
   consumer names match the producer bindings, especially after renaming them.
 - **App loads but replies fail:** check Email Sending access, the paid plan,

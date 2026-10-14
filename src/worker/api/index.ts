@@ -9,7 +9,8 @@ import {
   reviseDraft,
 } from "../agent/draft.ts";
 import { enqueueDraftRun } from "../agent/runs.ts";
-import { parseAiModel } from "../../shared/ai-model.ts";
+import { parseAiSettings, type AiSettings } from "../../shared/ai-model.ts";
+import { AiConfigurationError } from "../ai-model.ts";
 import {
   AttachmentInputError,
   type OutboundAttachmentInput,
@@ -37,11 +38,10 @@ api.route("/compose", composeApi);
 
 api.get("/settings/general", async (c) => {
   const [settings, subscriptions] = await Promise.all([
-    c.env.DB.one<{
+    c.env.DB.one<AiSettings & {
       browser_notifications_enabled: number;
-      ai_model: string | null;
     }>(
-      "SELECT browser_notifications_enabled, ai_model FROM global_settings WHERE id = 1",
+      "SELECT browser_notifications_enabled, ai_provider, ai_base_url, ai_model FROM global_settings WHERE id = 1",
     ),
     c.env.DB.one<{ count: number }>(
       "SELECT COUNT(*) AS count FROM push_subscriptions",
@@ -58,22 +58,24 @@ api.get("/settings/general", async (c) => {
     push_subscription_count: Number(subscriptions?.count ?? 0),
     vapid_public_key: configured ? c.env.VAPID_PUBLIC_KEY! : null,
     ai_model: settings?.ai_model ?? null,
+    ai_provider: settings?.ai_provider ?? "disabled",
+    ai_base_url: settings?.ai_base_url ?? null,
+    ai_workers_available: Boolean(c.env.AI),
+    ai_external_available: Boolean(c.env.AI_API_KEY?.trim()),
   };
   return c.json(result);
 });
 
 api.patch("/settings/general", async (c) => {
-  const body = await c.req.json<{ ai_model?: unknown }>();
-  if (!("ai_model" in body)) return c.json({ error: "Nothing to update" }, 400);
-  const parsed = parseAiModel(body.ai_model);
+  const parsed = parseAiSettings(await c.req.json<unknown>());
   if ("error" in parsed) return c.json({ error: parsed.error }, 400);
   await c.env.DB.query(
     `UPDATE global_settings
-     SET ai_model = $1, updated_at = now()
+     SET ai_provider = $1, ai_base_url = $2, ai_model = $3, updated_at = now()
      WHERE id = 1`,
-    [parsed.model],
+    [parsed.settings.ai_provider, parsed.settings.ai_base_url, parsed.settings.ai_model],
   );
-  return c.json({ ok: true, ai_model: parsed.model });
+  return c.json({ ok: true, ...parsed.settings });
 });
 
 api.post("/settings/browser-notifications", async (c) => {
@@ -690,7 +692,12 @@ api.post("/draft-runs/:id/retry", async (c) => {
   }
   if (run.status === "ready")
     return c.json({ error: "This draft is already ready" }, 409);
-  await enqueueDraftRun(c.env, run.thread_id, run.inbound_message_id);
+  try {
+    await enqueueDraftRun(c.env, run.thread_id, run.inbound_message_id, { retryFailed: true });
+  } catch (error) {
+    if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
+    throw error;
+  }
   return c.json({ ok: true });
 });
 
@@ -732,8 +739,13 @@ api.post("/threads/:id/draft", async (c) => {
     return c.json({ error: "Automated messages are not drafted" }, 409);
   }
 
-  const runId = await enqueueDraftRun(c.env, threadId, latestMessage.id);
-  return c.json({ ok: true, run_id: runId }, 202);
+  try {
+    const runId = await enqueueDraftRun(c.env, threadId, latestMessage.id, { retryFailed: true });
+    return c.json({ ok: true, run_id: runId }, 202);
+  } catch (error) {
+    if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
+    throw error;
+  }
 });
 
 api.post("/threads/:id/draft/revise", async (c) => {
@@ -762,6 +774,7 @@ api.post("/threads/:id/draft/revise", async (c) => {
     });
     return c.json(draft);
   } catch (error) {
+    if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
     if (error instanceof DraftRevisionError)
       return c.json({ error: error.message }, error.status);
     console.error("Draft revision failed", error);

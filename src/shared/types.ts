@@ -1,3 +1,5 @@
+import type { AiSettings } from "./ai-model";
+
 export interface Mailbox {
   id: number;
   address: string;
@@ -18,13 +20,13 @@ export interface Domain {
   activated_at: string | null;
 }
 
-export interface GeneralSettings {
+export interface GeneralSettings extends AiSettings {
   browser_notifications_enabled: boolean;
   browser_notifications_configured: boolean;
   push_subscription_count: number;
   vapid_public_key: string | null;
-  /** Custom language model for AI features; null uses DEFAULT_AI_MODEL. */
-  ai_model: string | null;
+  ai_workers_available: boolean;
+  ai_external_available: boolean;
 }
 
 export interface BrowserPushSubscription {

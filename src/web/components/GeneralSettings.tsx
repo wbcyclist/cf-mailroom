@@ -1,16 +1,12 @@
-import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
-import { AI_MODEL_CATALOG_URL, DEFAULT_AI_MODEL } from "../../shared/ai-model";
+import { AiSettings } from "./AiSettings";
 import {
   disableBrowserNotifications,
   enableBrowserNotifications,
   fetchGeneralSettings,
-  updateAiModel,
 } from "../api";
-import { DashLink } from "./DashLink";
 import {
   BrowserPushError,
   createBrowserPushSubscription,
@@ -147,80 +143,11 @@ export function GeneralSettings(props: {
           </SettingsPanel>
         </SettingsBlock>
 
-        <AiModelSettings saved={settings.data?.ai_model} />
+        <AiSettings saved={settings.data} />
 
         <McpSettings />
       </SettingsPage>
     </div>
-  );
-}
-
-function AiModelSettings(props: { saved: string | null | undefined }) {
-  const queryClient = useQueryClient();
-  const [value, setValue] = useState<string | null>(null);
-  const saved = props.saved ?? "";
-  const current = value ?? saved;
-  const dirty = current.trim() !== saved;
-
-  const save = useMutation({
-    mutationFn: () => updateAiModel(current.trim() || null),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["settings", "general"] });
-      setValue(null);
-    },
-  });
-
-  return (
-    <SettingsBlock id="ai-settings-heading" title="AI">
-      <SettingsPanel>
-        <form
-          className="px-4 py-4 sm:px-5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (dirty) save.mutate();
-          }}
-        >
-          <label htmlFor="ai-model" className="text-[13.5px] font-medium text-foreground">
-            Language model
-          </label>
-          <div className="mt-2 flex max-w-xl gap-2">
-            <Input
-              id="ai-model"
-              value={current}
-              onChange={(event) => {
-                setValue(event.target.value);
-                save.reset();
-              }}
-              placeholder={DEFAULT_AI_MODEL}
-              disabled={props.saved === undefined || save.isPending}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoComplete="off"
-              aria-describedby="ai-model-help"
-              aria-invalid={save.isError || undefined}
-              className="font-mono text-[13px] md:text-[13px]"
-            />
-            <Button type="submit" variant="outline" disabled={!dirty || save.isPending}>
-              {save.isPending ? "Saving…" : "Save"}
-            </Button>
-          </div>
-          <div id="ai-model-help" className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[13px] leading-5 text-muted-foreground">
-            <span className="whitespace-nowrap">Leave empty for default.</span>
-            <DashLink href={AI_MODEL_CATALOG_URL}>Model catalog</DashLink>
-          </div>
-          {save.isError && (
-            <p role="alert" className="mt-2 text-xs leading-5 text-destructive">
-              {save.error instanceof Error ? save.error.message : "Couldn’t save the model. Try again."}
-            </p>
-          )}
-          {save.isSuccess && !dirty && (
-            <p role="status" className="mt-2 text-xs leading-5 text-muted-foreground">
-              Saved.
-            </p>
-          )}
-        </form>
-      </SettingsPanel>
-    </SettingsBlock>
   );
 }
 

@@ -23,7 +23,11 @@ test("empty values reset to the default", () => {
 });
 
 test("rejects values that are not model ids", () => {
-  for (const value of ["gpt-6-luna", "openai/", "open ai/gpt", "openai/gpt?x=1", 42, "a/".repeat(150) + "b"]) {
+  for (const value of ["openai/", "open ai/gpt", "openai/gpt?x=1", 42, "a/".repeat(150) + "b"]) {
     assert.ok("error" in parseAiModel(value), String(value));
   }
+});
+
+test("accepts external model IDs without a namespace", () => {
+  assert.deepEqual(parseAiModel("test-model"), { model: "test-model" });
 });

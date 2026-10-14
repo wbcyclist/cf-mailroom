@@ -94,6 +94,7 @@ test("labelNewThread persists matches from a completed model response", async ()
   const env = {
     DB: {
       async one(sql, values) {
+        if (sql.includes("FROM global_settings")) return { ai_provider: "workers-ai", ai_model: null };
         assert.match(sql, /FROM messages msg/);
         assert.deepEqual(values, [42, 7]);
         return {

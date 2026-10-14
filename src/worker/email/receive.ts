@@ -2,6 +2,7 @@ import { putFile } from "../files.ts";
 import { type SqlStatement, statement } from "../database.ts";
 import PostalMime, { type Attachment, type Email } from "postal-mime";
 import { enqueueDraftRun } from "../agent/runs.ts";
+import { AiConfigurationError } from "../ai-model.ts";
 import { splitQuotedTail } from "../../shared/quote.ts";
 import { labelNewThread } from "./label.ts";
 import { notifyNewEmail } from "../notifications/push.ts";
@@ -142,7 +143,13 @@ async function enqueueIfExternal(
     "SELECT id FROM mailboxes WHERE address = $1",
     [sender],
   );
-  if (!fromOurAddress) await enqueueDraftRun(env, threadId, inboundMessageId);
+  if (!fromOurAddress) {
+    try {
+      await enqueueDraftRun(env, threadId, inboundMessageId);
+    } catch (error) {
+      if (!(error instanceof AiConfigurationError)) throw error;
+    }
+  }
 }
 
 async function findMailbox(
