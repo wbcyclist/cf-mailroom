@@ -270,7 +270,7 @@ export async function sendNewEmailAttempt(
         now,
       ],
     ),
-    ...recordAttachmentStatements(staged, messageId),
+    ...recordAttachmentStatements(staged, messageId, conversationId),
     statement(
       `UPDATE threads
        SET message_count = 1, snippet = $1, last_message_at = $2, is_read = 1

@@ -148,13 +148,13 @@ day. Set `MCP_SEND_ENABLED=false` to remove the send tools from every client
 immediately.
 
 **Authorization.** The Worker is its own OAuth 2.1 authorization server. It
-supports Client ID Metadata Documents (the MCP 2026 preferred registration
-mechanism) and Dynamic Client Registration as a fallback, so clients need no
-preconfigured callback URLs. Authorization Code uses S256 PKCE; access tokens
+is for internal use only. Dynamic Client Registration and Client ID Metadata
+Documents are disabled. An administrator must preconfigure each client and its
+exact callback URLs in `OAUTH_KV`. Authorization Code uses S256 PKCE; access tokens
 last 15 minutes and refresh tokens 30 days. Read access is always required; the
 send tools are registered only when the token includes `inbox.send`.
 
-**Enabling it.** MCP is deployed with the app. Because Access protects the
+**Enabling it.** Preconfigure the client using the deployment guide. MCP is deployed with the app. Because Access protects the
 whole Worker, MCP clients need a Bypass application for `/mcp` and
 `/.well-known`; the `/authorize` consent page stays behind the same Access
 application as the web UI. See

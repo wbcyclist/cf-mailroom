@@ -9,7 +9,6 @@ import { authorizationHandler, type AuthorizationEnv } from "./authorization.ts"
 import { MCP_READ_SCOPE, MCP_SEND_SCOPE, type OAuthGrantProps } from "./auth-types.ts";
 import {
   isRejectedMcpRouteLookalike,
-  MCP_REGISTRATION_ENDPOINT,
   MCP_ROUTE,
   MCP_TOKEN_ENDPOINT,
 } from "./route.ts";
@@ -148,8 +147,7 @@ function getOAuthProvider(origin: string, web: WebHandler): OAuthProvider<McpWor
   } satisfies ExportedHandler<McpWorkerEnv>,
   authorizeEndpoint: "/authorize",
   tokenEndpoint: MCP_TOKEN_ENDPOINT,
-  clientRegistrationEndpoint: MCP_REGISTRATION_ENDPOINT,
-  clientIdMetadataDocumentEnabled: true,
+  clientIdMetadataDocumentEnabled: false,
   scopesSupported: [MCP_READ_SCOPE, MCP_SEND_SCOPE],
   resourceMetadata: {
     // Production origins are always HTTPS. Local http://localhost dev derives
@@ -163,7 +161,6 @@ function getOAuthProvider(origin: string, web: WebHandler): OAuthProvider<McpWor
   },
   accessTokenTTL: 15 * 60,
   refreshTokenTTL: 30 * 24 * 60 * 60,
-  clientRegistrationTTL: 90 * 24 * 60 * 60,
   allowPlainPKCE: false,
   allowImplicitFlow: false,
   tokenExchangeCallback(options) {

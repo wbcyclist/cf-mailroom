@@ -23,7 +23,11 @@ interface WorkerEnv {
   EMAIL: OutboundEmailBinding;
   AI?: Ai;
   AI_API_KEY?: string;
-  DRAFT_QUEUE: Queue<{ runId: number }>;
+  DRAFT_QUEUE: Queue<{ runId: number; dispatchId: string }>;
+  QUEUE_DAILY_OPERATION_LIMIT?: string;
+  QUEUE_MONTHLY_OPERATION_LIMIT?: string;
+  AI_DAILY_CALL_LIMIT?: string;
+  AI_MONTHLY_CALL_LIMIT?: string;
   OAUTH_KV: KVNamespace;
   MCP_SEND_ENABLED?: string;
   MCP_DAILY_SEND_LIMIT?: string;

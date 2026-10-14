@@ -13,6 +13,7 @@ import {
 } from "./attachments.ts";
 import { sendEmail, type SendEmailEnv } from "./send.ts";
 import { claimDailySendBudget } from "./send-budget.ts";
+import { MAX_MESSAGE_CHARS } from "../../shared/email-limits.ts";
 
 export interface ReplyEnv extends SendEmailEnv {
   DB: Database;
@@ -52,6 +53,8 @@ export async function sendReplyAttempt(
   env: ReplyEnv,
   intent: ReplyIntent,
 ): Promise<ReplyAttemptResult> {
+  if (typeof intent.text !== "string" || intent.text.length > MAX_MESSAGE_CHARS)
+    throw new ReplyIntentError("Reply text exceeds the message limit", 400);
   const attachments = normalizeAttachments(intent.attachments ?? []);
   if (!intent.text.trim() && attachments.length === 0) {
     throw new ReplyIntentError("Reply text is required", 400);
@@ -127,6 +130,15 @@ export async function sendReplyAttempt(
       "Reply recipient changed after it was reviewed; read the Conversation again",
       409,
     );
+  }
+
+  if (!existing && intent.draftId !== undefined) {
+    const draft = await env.DB.one(
+      `SELECT id FROM drafts WHERE id = $1 AND thread_id = $2
+       AND source_inbound_message_id = $3 AND status = 'pending'`,
+      [intent.draftId, intent.threadId, lastInbound.id],
+    );
+    if (!draft) throw new ReplyIntentError("Draft no longer matches the reply target", 409);
   }
 
   let staged: StagedAttachment[] = existing
@@ -283,7 +295,7 @@ export async function sendReplyAttempt(
         now,
       ],
     ),
-    ...recordAttachmentStatements(staged, messageId),
+    ...recordAttachmentStatements(staged, messageId, intent.threadId),
     statement(
       `UPDATE threads
        SET snippet = $1, message_count = message_count + 1, last_message_at = $2, is_read = 1

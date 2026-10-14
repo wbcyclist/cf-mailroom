@@ -1,5 +1,6 @@
 import { aiConfigurationError, getAiSettings } from "../ai-model.ts";
 import { AiRequestError, generateAiText } from "../ai.ts";
+import { claimAiBudget } from "../usage-budget.ts";
 
 export interface LabelRule {
   id: number;
@@ -44,14 +45,15 @@ export async function labelNewThread(
 
   const evaluatedLabels = labels.slice(0, MAX_LABELS_PER_EVALUATION);
   const state = {
-    from: message.from_name
+    from: (message.from_name
       ? `${message.from_name} <${message.from_address}>`
-      : message.from_address,
-    subject: message.subject,
+      : message.from_address).slice(0, 500),
+    subject: message.subject.slice(0, 1000),
     body: (message.text_body ?? "").slice(0, MAX_BODY_CHARS),
   };
   let response: unknown;
   if (settings.ai_provider === "workers-ai") {
+    await claimAiBudget(env);
     try {
       response = await env.AI!.run(
         LABEL_MODEL,

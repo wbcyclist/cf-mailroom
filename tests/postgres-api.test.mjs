@@ -439,7 +439,7 @@ test("settings, domains, inboxes, playbooks and draft queues use native PostgreS
   const msg = await f.db.one("SELECT id, thread_id FROM messages");
   f.env.AI = { run() { assert.fail("Unexpected paid call"); } };
   const run = await enqueueDraftRun(f.env, msg.thread_id, msg.id);
-  assert.deepEqual(f.jobs, [{ runId: run }]);
+  assert.deepEqual(f.jobs.map(({ runId }) => ({ runId })), [{ runId: run }]);
   // An automated message must be rejected before invoking the paid model.
   await f.db.query("UPDATE mailboxes SET agent_mode = 'draft' WHERE id = $1", [
     f.inbox.id,

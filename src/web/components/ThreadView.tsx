@@ -5,12 +5,13 @@ import {
   bulkUpdateThreads,
   discardDraft,
   fetchThread,
+  fetchMessageBody,
   markRead,
   reviseDraft,
   sendReply,
   unarchiveThread,
 } from "../api";
-import type { Draft, Message } from "../../shared/types";
+import type { Draft, Message, ReplyTarget } from "../../shared/types";
 import {
   deriveAgentDraftStatus,
   type AgentDraftStatus,
@@ -42,6 +43,8 @@ export function ThreadView(props: {
   onMoved: () => void;
 }) {
   const queryClient = useQueryClient();
+  const [before, setBefore] = useState<number | null>(null);
+  const [replyTarget, setReplyTarget] = useState<ReplyTarget | null>(null);
   const [replyText, setReplyText] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [sendNotice, setSendNotice] = useState<string | null>(null);
@@ -59,9 +62,10 @@ export function ThreadView(props: {
   const attemptIds = useRef(new Map<string, { text: string; id: string }>());
 
   const detail = useQuery({
-    queryKey: ["thread", props.threadId],
-    queryFn: () => fetchThread(props.threadId),
+    queryKey: ["thread", props.threadId, before],
+    queryFn: () => fetchThread(props.threadId, before),
     refetchInterval: (query) => {
+      if (before !== null) return false;
       const status = query.state.data?.draft_run?.status;
       return status === "queued" || status === "generating" ? 3_000 : 30_000;
     },
@@ -84,6 +88,8 @@ export function ThreadView(props: {
   }, [props.deferMarkRead, markThreadRead]);
 
   useEffect(() => {
+    setBefore(null);
+    setReplyTarget(null);
     setReplyText("");
     setPendingFiles([]);
     setSendNotice(null);
@@ -101,6 +107,11 @@ export function ThreadView(props: {
     });
   }, [detail.data, props.threadId]);
 
+  useEffect(() => {
+    if (!replyText.trim() && pendingFiles.length === 0 && usedDraftId === null && before === null && detail.data)
+      setReplyTarget(detail.data.reply_target);
+  }, [detail.data, replyText, pendingFiles.length, usedDraftId, before]);
+
   const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ["thread", props.threadId] });
     queryClient.invalidateQueries({ queryKey: ["threads"] });
@@ -112,10 +123,11 @@ export function ThreadView(props: {
       text: string;
       attemptId: string;
       attemptKey: string;
+      target: ReplyTarget;
       draftId?: number;
       files?: File[];
     }) =>
-      sendReply(props.threadId, args.text, args.attemptId, args.draftId, args.files ?? []),
+      sendReply(props.threadId, args.text, args.attemptId, args.target, args.draftId, args.files ?? []),
     onSuccess: (result, args) => {
       if (result.status === "sent") {
         setReplyText("");
@@ -182,14 +194,15 @@ export function ThreadView(props: {
   const draft = detail.data?.drafts.at(-1) ?? null;
 
   useEffect(() => {
-    if (!draft || seenDraftIds.current.has(draft.id)) return;
+    if (before !== null || !draft || seenDraftIds.current.has(draft.id)) return;
     // Consider each draft once: polling must not restore text the user cleared
     // or replace a reply they were already writing when the draft arrived.
     seenDraftIds.current.add(draft.id);
     if (replyText.trim() || reply.isPending || discard.isPending || revise.isPending) return;
     setReplyText(draft.text_body);
+    setReplyTarget(detail.data?.reply_target ?? null);
     setUsedDraftId(draft.id);
-  }, [draft, replyText, reply.isPending, discard.isPending, revise.isPending]);
+  }, [draft, replyText, reply.isPending, discard.isPending, revise.isPending, before]);
 
   if (detail.isLoading) return <ThreadViewSkeleton onBack={props.onBack} />;
 
@@ -240,10 +253,12 @@ export function ThreadView(props: {
     return id;
   };
 
+  const targetChanged = JSON.stringify(replyTarget) !== JSON.stringify(detail.data.reply_target);
   const submitReply = () => {
+    if (!replyTarget || targetChanged || before !== null) return;
     const text = replyText.trim();
     if ((text || pendingFiles.length > 0) && !reply.isPending && !discard.isPending && !revise.isPending) {
-      const fingerprint = `${text} ${pendingFiles.map((file) => `${file.name}:${file.size}`).join(",")}`;
+      const fingerprint = `${JSON.stringify(replyTarget)} ${text} ${pendingFiles.map((file) => `${file.name}:${file.size}`).join(",")}`;
       const attemptKey = usedDraftId === null ? "manual" : `draft-${usedDraftId}`;
       reply.mutate({
         text,
@@ -251,18 +266,20 @@ export function ThreadView(props: {
         draftId: usedDraftId ?? undefined,
         attemptId: attemptFor(attemptKey, fingerprint),
         attemptKey,
+        target: replyTarget,
       });
     }
   };
 
   const applyDraft = (next: Draft) => {
+    setReplyTarget(detail.data.reply_target);
     seenDraftIds.current.add(next.id);
     setReplyText(next.text_body);
     setUsedDraftId(next.id);
     setUndoState(null);
   };
 
-  const composerBusy = reply.isPending || discard.isPending || revise.isPending;
+  const composerBusy = reply.isPending || discard.isPending || revise.isPending || before !== null;
 
   const submitInstruction = () => {
     if (composerBusy) return;
@@ -386,6 +403,10 @@ export function ThreadView(props: {
 
       <div ref={conversationRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
         <div className="mr-auto w-full max-w-[800px] space-y-3 px-4 py-5 sm:px-6 md:py-6">
+          <div className="flex gap-2">
+            {detail.data.next_before !== null && <Button variant="outline" size="sm" onClick={() => setBefore(detail.data.next_before)}>Older messages</Button>}
+            {before !== null && <Button variant="outline" size="sm" onClick={() => setBefore(null)}>Latest messages</Button>}
+          </div>
           {messages.map((message) => (
             <MessageCard key={message.id} message={message} />
           ))}
@@ -409,7 +430,7 @@ export function ThreadView(props: {
                 canDraft={messages.some((message) => message.direction === "inbound")}
                 error={detail.data.draft_run?.error ?? null}
                 busy={discard.isPending}
-                disabled={reply.isPending || revise.isPending}
+                disabled={composerBusy || targetChanged}
                 instructionOpen={instructionOpen}
                 canUndo={undoState !== null && !revise.isPending}
                 onUse={() => draft && applyDraft(draft)}
@@ -434,7 +455,24 @@ export function ThreadView(props: {
                 onClose={closeInstruction}
               />
             )}
+            <div className="px-3.5 pt-3 text-xs text-muted-foreground">
+              To: {replyTarget?.expected_recipients.join(", ") || "No reply target"}
+            </div>
+            {before !== null && <p className="px-3.5 pt-2 text-xs">Open the latest messages before replying.</p>}
+            {targetChanged && before === null && detail.data.reply_target && (
+              <div role="alert" className="px-3.5 pt-2 text-xs">
+                <p>The conversation changed. Review the latest message before replying to {detail.data.reply_target.expected_recipients.join(", ")}.</p>
+                <Button variant="outline" size="sm" className="mt-2" disabled={composerBusy} onClick={() => {
+                  setReplyTarget(detail.data.reply_target);
+                  setUsedDraftId(null);
+                  setUndoState(null);
+                  attemptIds.current.clear();
+                  reply.reset();
+                }}>Confirm reply target</Button>
+              </div>
+            )}
             <Textarea
+              maxLength={100000}
               ref={replyRef}
               value={replyText}
               disabled={composerBusy}
@@ -515,7 +553,7 @@ export function ThreadView(props: {
                 </Button>
                 <Button
                   onClick={submitReply}
-                  disabled={(!replyText.trim() && pendingFiles.length === 0) || composerBusy}
+                  disabled={(!replyText.trim() && pendingFiles.length === 0) || composerBusy || !replyTarget || targetChanged}
                 >
                   <SendIcon className="h-3.5 w-3.5" />
                   {reply.isPending ? "Sending…" : "Send reply"}
@@ -568,12 +606,20 @@ export function ThreadView(props: {
 }
 
 function MessageCard({ message }: { message: Message }) {
+  const [expanded, setExpanded] = useState(false);
+  const body = useQuery({
+    queryKey: ["message-body", message.id], queryFn: () => fetchMessageBody(message.id),
+    enabled: expanded && Boolean(message.has_full_body), staleTime: Infinity,
+    refetchInterval: false, refetchOnWindowFocus: false,
+  });
+  const text = expanded ? body.data?.text_body ?? message.text_body : message.text_body;
+  const html = expanded ? body.data?.html_body ?? message.html_body : message.html_body;
   const [showQuoted, setShowQuoted] = useState(false);
   const isOutbound = message.direction === "outbound";
   const displayName = isOutbound
     ? message.from_name || message.from_address
     : message.from_name || message.from_address;
-  const { main, quoted } = splitQuotedTail(message.text_body ?? "");
+  const { main, quoted } = splitQuotedTail(text ?? "");
 
   return (
     <Card className="gap-0 p-4 sm:p-5">
@@ -603,9 +649,13 @@ function MessageCard({ message }: { message: Message }) {
         </time>
       </div>
 
-      {message.html_body ? (
+      {message.has_full_body && !expanded && <Button variant="outline" size="sm" className="mb-3" onClick={() => setExpanded(true)}>Show full message</Button>}
+      {body.isLoading && <p className="text-xs">Loading message…</p>}
+      {body.isError && <Button variant="outline" size="sm" onClick={() => body.refetch()}>Retry loading message</Button>}
+      {body.data?.truncated && <p className="mb-3 text-xs">This message is too large to display in full. {body.data.downloadable && <a className="underline" href={`/api/messages/${message.id}/download`}>Download original email</a>}</p>}
+      {html ? (
         <EmailHtmlBody
-          html={message.html_body}
+          html={html}
           attachments={message.attachments}
           sender={displayName}
         />
@@ -730,6 +780,7 @@ function DraftAssist(props: {
 
   return (
     <span className="flex shrink-0 items-center gap-2.5">
+      {props.status === "deferred" && <span title={props.error ?? undefined}>AI paused until the usage limit resets</span>}
       {props.status === "failed" && (
         <span title={props.error ?? undefined}>Automatic draft failed</span>
       )}

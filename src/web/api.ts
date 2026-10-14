@@ -12,6 +12,7 @@ import type {
   Playbook,
   PlaybookInput,
   ReplyAttemptResult,
+  ReplyTarget,
   ThreadSummary,
   ThreadDetail,
 } from "../shared/types";
@@ -217,7 +218,11 @@ export const fetchThreads = (query: ThreadQuery, cursor: ThreadCursor | null = n
   return request<ThreadSummary[]>(`/threads${search ? `?${search}` : ""}`);
 };
 
-export const fetchThread = (id: number) => request<ThreadDetail>(`/threads/${id}`);
+export const fetchThread = (id: number, before: number | null = null) =>
+  request<ThreadDetail>(`/threads/${id}${before === null ? "" : `?before=${before}`}`);
+
+export const fetchMessageBody = (id: number) =>
+  request<{ text_body: string | null; html_body: string | null; truncated: boolean; downloadable: boolean }>(`/messages/${id}/body`);
 
 export const searchThreads = (q: string, query: Omit<ThreadQuery, "status">) => {
   const params = threadScopeParams(query);
@@ -259,12 +264,15 @@ export const sendReply = (
   id: number,
   text: string,
   attemptId: string,
+  target: ReplyTarget,
   draftId?: number,
   attachments: File[] = [],
 ) => {
   const form = new FormData();
   form.set("text", text);
   form.set("attempt_id", attemptId);
+  form.set("inbound_message_id", String(target.inbound_message_id));
+  form.set("expected_recipients", JSON.stringify(target.expected_recipients));
   if (draftId !== undefined) form.set("draft_id", String(draftId));
   for (const file of attachments) form.append("attachments", file, file.name);
   return request<ReplyAttemptResult>(`/threads/${id}/reply`, {

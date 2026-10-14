@@ -5,6 +5,7 @@ export type AgentDraftStatus =
   | "processing"
   | "draft_ready"
   | "failed"
+  | "deferred"
   | "skipped"
   | "off"
   | "not_processed"
@@ -25,6 +26,7 @@ export function deriveAgentDraftStatus(input: AgentDraftStatusInput): AgentDraft
   if (input.runStatus === "queued" || input.runStatus === "generating") {
     return "processing";
   }
+  if (input.runStatus === "deferred") return "deferred";
   if (input.runStatus === "failed") return "failed";
   if (input.runStatus === "superseded") return "skipped";
   if (input.runStatus === "ready") return "processed";

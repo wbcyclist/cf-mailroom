@@ -1,6 +1,7 @@
 import { generateText } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 import { requireAiSettings } from "./ai-model.ts";
+import { claimAiBudget } from "./usage-budget.ts";
 
 const TIMEOUT_MS = 60_000;
 const MAX_INPUT_CHARS = 128_000;
@@ -35,6 +36,7 @@ export async function generateAiText(
   ) {
     throw new AiRequestError("Invalid AI output limit");
   }
+  await claimAiBudget(env);
   const signal = AbortSignal.timeout(TIMEOUT_MS);
   const model = settings.ai_model;
   try {

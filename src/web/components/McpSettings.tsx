@@ -6,7 +6,7 @@ import { DashLink } from "./DashLink";
 import { SettingsBlock, SettingsPanel } from "./SettingsNavigation";
 
 /**
- * MCP clients must reach discovery, registration, token, and /mcp without an
+ * MCP clients must reach discovery, token, and /mcp without an
  * Access session. Fetching without cookies shows whether Access intercepts them.
  */
 async function checkPublicOAuth(): Promise<boolean> {
@@ -37,7 +37,7 @@ export function McpSettings() {
     <SettingsBlock
       id="mcp-settings-heading"
       title="MCP"
-      description="Add this URL to an MCP client to let it read and send email."
+      description="Internal clients only. Ask an administrator to configure your client ID and callback URL before connecting. Public registration is disabled."
     >
       <SettingsPanel>
         <div className="px-4 py-4 sm:px-5">

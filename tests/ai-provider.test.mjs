@@ -33,6 +33,7 @@ const responses = (text = "Reply") => ({
 function env(config = settings) {
   return {
     DB: {
+      async transaction(work) { return work({ async query() { return { rows: [] }; } }); },
       async one() {
         return config;
       },

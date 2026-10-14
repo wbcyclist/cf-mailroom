@@ -146,12 +146,13 @@ export async function stageAttachments(
 export function recordAttachmentStatements(
   staged: ReadonlyArray<StagedAttachment>,
   rfcMessageId: string,
+  threadId: number,
 ): SqlStatement[] {
   return staged.map((attachment) =>
     statement(
       `INSERT INTO attachments
          (message_id, filename, content_type, size, disposition, content_id, file_key)
-       SELECT id, $1, $2, $3, $4, $5, $6 FROM messages WHERE message_id = $7`,
+       SELECT id, $1, $2, $3, $4, $5, $6 FROM messages WHERE message_id = $7 AND thread_id = $8`,
       [
         attachment.filename,
         attachment.content_type,
@@ -160,6 +161,7 @@ export function recordAttachmentStatements(
         attachment.content_id,
         attachment.file_key,
         rfcMessageId,
+        threadId,
       ],
     ),
   );

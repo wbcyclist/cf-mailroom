@@ -1,6 +1,7 @@
 import { statement } from "../database.ts";
 import { AiRequestError, generateAiText } from "../ai.ts";
 import { AiConfigurationError } from "../ai-model.ts";
+import { UsageLimitError } from "../usage-budget.ts";
 import type { Draft } from "../../shared/types.ts";
 
 const MAX_CONTEXT_MESSAGES = 12;
@@ -60,14 +61,14 @@ export class DraftRevisionError extends Error {
   }
 }
 
-export async function processDraftRun(env: Env, runId: number): Promise<void> {
-  const claimed = await env.DB.one<{ id: number }>(
+export async function processDraftRun(env: Env, runId: number, dispatchId?: string): Promise<void> {
+  const claimed = await env.DB.one<{ id: number; attempt_count: number }>(
     `UPDATE draft_runs
      SET status = 'generating', attempt_count = attempt_count + 1,
          error = NULL, started_at = now(), finished_at = NULL
-     WHERE id = $1 AND status = 'queued'
-     RETURNING id`,
-    [runId],
+     WHERE id = $1 AND status = 'queued' AND ($2::text IS NULL OR dispatch_id = $2)
+     RETURNING id, attempt_count`,
+    [runId, dispatchId ?? null],
   );
   if (!claimed) return;
 
@@ -77,6 +78,7 @@ export async function processDraftRun(env: Env, runId: number): Promise<void> {
       await markSuperseded(
         env,
         runId,
+        claimed.attempt_count,
         "Agent drafting is disabled for this Inbox",
       );
       return;
@@ -89,7 +91,7 @@ export async function processDraftRun(env: Env, runId: number): Promise<void> {
         context.inbound_message_id,
       ))
     ) {
-      await markSuperseded(env, runId, "A newer customer message arrived");
+      await markSuperseded(env, runId, claimed.attempt_count, "A newer customer message arrived");
       return;
     }
 
@@ -98,6 +100,7 @@ export async function processDraftRun(env: Env, runId: number): Promise<void> {
       await markSuperseded(
         env,
         runId,
+        claimed.attempt_count,
         "The target message is no longer draftable",
       );
       return;
@@ -115,34 +118,40 @@ export async function processDraftRun(env: Env, runId: number): Promise<void> {
       await markSuperseded(
         env,
         runId,
+        claimed.attempt_count,
         "A newer customer message arrived during generation",
       );
       return;
     }
 
-    const draft = await storeAgentDraft(
-      env,
-      context,
-      generated,
-      draftNote(generated, inputs),
-    );
-
-    await env.DB.query(
-      `UPDATE draft_runs
-       SET status = 'ready', draft_id = $1, error = NULL,
-           finished_at = now()
-       WHERE id = $2`,
-      [draft.id, runId],
-    );
+    await env.DB.transaction(async (db) => {
+      const active = await db.one(
+        "SELECT id FROM draft_runs WHERE id = $1 AND status = 'generating' AND attempt_count = $2 FOR UPDATE",
+        [runId, claimed.attempt_count],
+      );
+      if (!active) return;
+      const draft = await storeAgentDraft({ ...env, DB: db }, context, generated, draftNote(generated, inputs));
+      await db.query(
+        "UPDATE draft_runs SET status = 'ready', draft_id = $1, error = NULL, finished_at = now() WHERE id = $2",
+        [draft.id, runId],
+      );
+    });
   } catch (error) {
+    if (error instanceof UsageLimitError) {
+      await env.DB.query(
+        "UPDATE draft_runs SET status = 'deferred', error = $2, retry_after = $3 WHERE id = $1 AND status = 'generating' AND attempt_count = $4",
+        [runId, error.message, error.retryAfter, claimed.attempt_count],
+      );
+      return;
+    }
     const message =
       error instanceof Error ? error.message : "Draft generation failed";
     await env.DB.query(
       `UPDATE draft_runs
        SET status = 'failed', error = $1,
            finished_at = now()
-       WHERE id = $2`,
-      [message.slice(0, 2000), runId],
+       WHERE id = $2 AND status = 'generating' AND attempt_count = $3`,
+      [message.slice(0, 2000), runId, claimed.attempt_count],
     );
     // Failed model calls require an explicit retry. A queue redelivery must
     // not repeat a paid request, including one that timed out after dispatch.
@@ -385,14 +394,15 @@ async function isLatestInbound(
 async function markSuperseded(
   env: Env,
   runId: number,
+  attempt: number,
   reason: string,
 ): Promise<void> {
   await env.DB.query(
     `UPDATE draft_runs
      SET status = 'superseded', error = $1,
          finished_at = now()
-     WHERE id = $2`,
-    [reason, runId],
+     WHERE id = $2 AND status = 'generating' AND attempt_count = $3`,
+    [reason, runId, attempt],
   );
 }
 

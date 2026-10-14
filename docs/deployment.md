@@ -259,10 +259,56 @@ Missing bindings or secrets produce a setup message and prevent AI calls.
   that have not called a model yet. A request already in progress may still finish
   and be billed. Existing labels and drafts remain available.
 
-These are per-request limits, not a daily or monthly spending cap. Each new
-conversation can trigger a label call and each eligible inbound message can
-trigger a draft call. External AI usage is billed by that provider; Worker and
-Queue usage still belongs to Cloudflare.
+### Usage budgets
+
+Mailroom reserves usage in PostgreSQL before calling a provider. Reservations are
+atomic across concurrent Workers. A timeout or failed queue send is not refunded,
+because the provider may have accepted the request. Database failures stop new
+paid work. All periods use UTC; day limits reset at 00:00 UTC (08:00 in China).
+
+Configure these Worker environment variables (not `VITE_*` build variables):
+
+| Variable | Default | Meaning |
+| --- | ---: | --- |
+| `QUEUE_DAILY_OPERATION_LIMIT` | `10000` | Daily operation reservations for this instance |
+| `QUEUE_MONTHLY_OPERATION_LIMIT` | `900000` | Monthly operation reservations for this instance |
+| `AI_DAILY_CALL_LIMIT` | `100` | Daily model calls across all AI features |
+| `AI_MONTHLY_CALL_LIMIT` | `1000` | Monthly model calls across all AI features |
+
+Set a limit to `0` to stop that work. Invalid values also stop dispatch. Daily and
+monthly limits apply together. A monthly stop lasts until the next UTC month.
+AI limits count calls, not money or Neurons: models have different prices. Set a
+provider-side spending cap as well when your external AI provider supports it.
+
+Each draft queue send reserves **10 operations**, so the default daily budget
+allows at most **1,000 new queue sends**. This includes allowance for the normal
+write/read/delete cycle, the configured three retries, DLQ work, and extra
+headroom. Do not increase queue retries or add a DLQ consumer without revisiting
+this reservation. Duplicate enqueue requests do not reserve or send again.
+
+When the queue or AI budget is exhausted, mail is still stored and draft jobs
+become **deferred** in PostgreSQL. A Cron Trigger runs every 10 minutes and resumes
+at most 100 eligible jobs per pass after the reset. It does not enqueue jobs to
+wait for midnight. Only the latest inbound message per conversation is resumed.
+Label classification skips new work when the AI budget is exhausted; it does not
+build a backlog. Manual AI revisions return HTTP 429 until budget is available.
+
+Cloudflare Free includes 10,000 queue operations per day; Paid includes 1 million
+per month and bills excess operations. These are **account-wide** allowances.
+This application cannot see another project's usage or impose an account-wide
+billing cutoff. Lower the variables to reserve capacity for other projects.
+The ledger is a conservative dispatch budget, not Cloudflare's billing meter:
+platform redelivery, direct queue writes, and work from other applications are
+outside it. See [Queues pricing](https://developers.cloudflare.com/queues/platform/pricing/).
+
+Generating tasks expire after five minutes and queued tasks after one hour.
+Expired tasks require an explicit retry because a paid request may already have
+completed. A late response or old queue delivery cannot overwrite a new attempt.
+
+Conversation pages contain at most 20 message previews. Full bodies load on demand
+and are bounded to 128,000 characters per representation; larger inbound messages
+can be downloaded as original MIME. Replies require the reviewed message and
+recipient snapshot, a request body below 4 MiB, and at most 100,000 text characters.
 
 ## Optional: connect an AI agent over MCP
 
@@ -280,15 +326,31 @@ endpoints, which Access blocks because it protects the whole Worker.
    destinations (use your own hostname, not a Worker destination), with a
    single **Bypass** policy for **Everyone**:
 
-   - `<worker>.<account>.workers.dev/mcp` (also covers the token and
-     registration endpoints under `/mcp/oauth/`)
+   - `<worker>.<account>.workers.dev/mcp` (also covers the
+     token endpoint under `/mcp/oauth/`)
    - `<worker>.<account>.workers.dev/.well-known` (OAuth discovery; its
      location is fixed by the OAuth specifications)
 
    A path application takes precedence over Worker-level Access. Everything
    else, including the `/authorize` consent page, stays protected. Leave
    **Managed OAuth off**. Add the same two paths for each custom domain you use.
-3. Select **Check again** in the card, then add the server URL
+3. Register an approved internal client before connecting. Dynamic registration
+   (`/mcp/oauth/register`) returns 404; URL-based Client ID Metadata Documents are
+   disabled. The administrator generates a public S256 PKCE client record and
+   writes it to the deployed OAuth namespace:
+
+   ```bash
+   mkdir -p work_tmp
+   node scripts/create-mcp-client.mjs internal-assistant http://localhost:49152/callback > work_tmp/mcp-client.json
+   OAUTH_KV_NAMESPACE_ID=replace-with-namespace-id
+   npx wrangler kv key put client:internal-assistant --namespace-id "$OAUTH_KV_NAMESPACE_ID" --path work_tmp/mcp-client.json --remote
+   ```
+
+   Replace the namespace ID and callback with your client's actual values. The
+   client must support a preconfigured client ID (`internal-assistant` here).
+   Exact callback URLs are checked; S256 PKCE is mandatory. No client secret is
+   needed for this public PKCE client. Run registration only as an administrator.
+4. Select **Check again** in the card, then add the server URL
    (`https://<worker>.<account>.workers.dev/mcp`) to your MCP client and
    approve it.
 

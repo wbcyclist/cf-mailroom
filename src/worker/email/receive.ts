@@ -1,3 +1,4 @@
+import { UsageLimitError } from "../usage-budget.ts";
 import { putFile } from "../files.ts";
 import { type SqlStatement, statement } from "../database.ts";
 import PostalMime, { type Attachment, type Email } from "postal-mime";
@@ -52,12 +53,10 @@ export async function receiveEmail(
       [mailbox.id],
     );
     if (!locked) throw new Error("Inbox was deleted during delivery");
-    await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
-      messageId,
-    ]);
     const duplicate = await db.one<{ id: number; thread_id: number }>(
-      "SELECT id, thread_id FROM messages WHERE message_id = $1",
-      [messageId],
+      `SELECT msg.id, msg.thread_id FROM messages msg JOIN threads t ON t.id = msg.thread_id
+       WHERE msg.message_id = $1 AND t.mailbox_id = $2`,
+      [messageId, mailbox.id],
     );
     if (duplicate)
       return {
@@ -105,6 +104,7 @@ export async function receiveEmail(
   if (stored.newThread) {
     ctx.waitUntil(
       labelNewThread(env, stored.threadId, stored.messageId).catch((error) => {
+        if (error instanceof UsageLimitError) return;
         console.error("Auto-label task failed", {
           threadId: stored.threadId,
           messageId: stored.messageId,

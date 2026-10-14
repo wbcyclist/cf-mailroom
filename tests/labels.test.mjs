@@ -93,6 +93,7 @@ test("labelNewThread persists matches from a completed model response", async ()
   const inserted = [];
   const env = {
     DB: {
+      async transaction(work) { return work({ async query() { return { rows: [] }; } }); },
       async one(sql, values) {
         if (sql.includes("FROM global_settings")) return { ai_provider: "workers-ai", ai_model: null };
         assert.match(sql, /FROM messages msg/);

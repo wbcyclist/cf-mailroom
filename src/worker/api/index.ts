@@ -1,6 +1,10 @@
 import { getFile } from "../files.ts";
 import { isUniqueViolation, statement } from "../database.ts";
 import { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { z } from "zod";
+import { MAX_MESSAGE_CHARS, MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_TOTAL_BYTES } from "../../shared/email-limits.ts";
+import { UsageLimitError } from "../usage-budget.ts";
 import { requireSameOrigin } from "./csrf.ts";
 import { composeApi } from "./compose.ts";
 import {
@@ -8,7 +12,7 @@ import {
   MAX_REVISION_INSTRUCTION_CHARS,
   reviseDraft,
 } from "../agent/draft.ts";
-import { enqueueDraftRun } from "../agent/runs.ts";
+import { enqueueDraftRun, expireDraftRuns } from "../agent/runs.ts";
 import { parseAiSettings, type AiSettings } from "../../shared/ai-model.ts";
 import { AiConfigurationError } from "../ai-model.ts";
 import {
@@ -542,10 +546,15 @@ api.get("/threads", async (c) => {
 });
 
 api.get("/threads/:id", async (c) => {
-  const id = c.req.param("id");
+  const id = parsePositiveId(c.req.param("id"));
+  const before = c.req.query("before") ? parsePositiveId(c.req.query("before")!) : null;
+  if (id === null || (c.req.query("before") && before === null)) return c.json({ error: "Invalid page" }, 400);
   const thread = await c.env.DB.one(
     `SELECT t.*, m.address AS mailbox_address, m.color AS mailbox_color,
        m.agent_mode AS mailbox_agent_mode,
+       latest_inbound.id AS reply_message_id,
+       latest_inbound.from_address AS reply_from_address,
+       latest_inbound.reply_to_addresses AS reply_addresses,
        COALESCE(
          latest_inbound.from_name,
          latest_inbound.from_address,
@@ -587,9 +596,12 @@ api.get("/threads/:id", async (c) => {
     c.env.DB.query(
       `SELECT id, thread_id, message_id, in_reply_to, references_ids, direction, sent_by,
         from_address, from_name, to_addresses, cc_addresses, reply_to_addresses, subject,
-        text_body, html_body, raw_key, is_auto_submitted, created_at
-       FROM messages WHERE thread_id = $1 ORDER BY created_at, id`,
-      [id],
+        left(text_body, 1000) AS text_body, NULL::text AS html_body,
+        (html_body IS NOT NULL OR length(text_body) > 1000) AS has_full_body,
+        raw_key, is_auto_submitted, created_at
+       FROM messages WHERE thread_id = $1 AND ($2::bigint IS NULL OR id < $2)
+       ORDER BY id DESC LIMIT 21`,
+      [id, before],
     ),
     c.env.DB.query(
       `SELECT d.*, p.name AS playbook_name
@@ -615,7 +627,15 @@ api.get("/threads/:id", async (c) => {
     ),
   ]);
 
-  const messageRows = messages.rows as unknown as Message[];
+  const hasOlder = messages.rows.length > 20;
+  const messageRows = messages.rows.slice(0, 20).reverse() as unknown as Message[];
+  const replyTarget = thread.reply_message_id ? {
+    id: thread.reply_message_id as number,
+    from_address: thread.reply_from_address as string,
+    reply_to_addresses: thread.reply_addresses as string,
+  } : null;
+  const replyRecipients: string[] = replyTarget ? JSON.parse(replyTarget.reply_to_addresses || "[]") : [];
+  if (replyTarget && replyRecipients.length === 0) replyRecipients.push(replyTarget.from_address);
   const messageIds = messageRows.map((message) => message.id);
   let attachments: Attachment[] = [];
   if (messageIds.length > 0) {
@@ -639,9 +659,35 @@ api.get("/threads/:id", async (c) => {
   return c.json({
     thread,
     messages: enrichedMessages,
+    next_before: hasOlder ? messageRows[0].id : null,
+    reply_target: replyTarget ? { inbound_message_id: replyTarget.id, expected_recipients: replyRecipients } : null,
     drafts: drafts.rows,
     draft_run: draftRun ?? null,
   });
+});
+
+api.get("/messages/:id/body", async (c) => {
+  const id = parsePositiveId(c.req.param("id"));
+  if (id === null) return c.json({ error: "Invalid message" }, 400);
+  const body = await c.env.DB.one(
+    `SELECT left(text_body, 128000) AS text_body, left(html_body, 128000) AS html_body,
+      (COALESCE(length(text_body), 0) > 128000 OR COALESCE(length(html_body), 0) > 128000) AS truncated,
+      (raw_key IS NOT NULL) AS downloadable FROM messages WHERE id = $1`, [id]);
+  if (!body) return c.json({ error: "Message not found" }, 404);
+  return c.json(body);
+});
+
+api.get("/messages/:id/download", async (c) => {
+  const id = parsePositiveId(c.req.param("id"));
+  if (id === null) return c.json({ error: "Invalid message" }, 400);
+  const message = await c.env.DB.one<{ raw_key: string | null }>("SELECT raw_key FROM messages WHERE id = $1", [id]);
+  if (!message?.raw_key) return c.json({ error: "Original email not found" }, 404);
+  const content = await getFile(c.env.DB, message.raw_key);
+  if (!content) return c.json({ error: "Original email not found" }, 404);
+  return new Response(content, { headers: {
+    "Content-Type": "message/rfc822", "Content-Disposition": `attachment; filename="message-${id}.eml"`,
+    "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+  } });
 });
 
 api.get("/attachments/:id", async (c) => {
@@ -672,6 +718,7 @@ api.get("/attachments/:id", async (c) => {
 });
 
 api.post("/draft-runs/:id/retry", async (c) => {
+  await expireDraftRuns(c.env);
   const id = parsePositiveId(c.req.param("id"));
   if (id === null) return c.json({ error: "Invalid Draft Run" }, 400);
   const run = await c.env.DB.one<{
@@ -684,6 +731,10 @@ api.post("/draft-runs/:id/retry", async (c) => {
     [id],
   );
   if (!run) return c.json({ error: "Draft Run not found" }, 404);
+  if (run.status === "queued" || run.status === "generating")
+    return c.json({ error: "This draft is still being processed" }, 409);
+  if (run.status === "deferred")
+    return c.json({ error: "This draft will resume automatically after its usage limit resets" }, 429);
   if (run.status === "superseded") {
     return c.json(
       { error: "A newer customer message has replaced this Draft Run" },
@@ -695,6 +746,7 @@ api.post("/draft-runs/:id/retry", async (c) => {
   try {
     await enqueueDraftRun(c.env, run.thread_id, run.inbound_message_id, { retryFailed: true });
   } catch (error) {
+    if (error instanceof UsageLimitError) return c.json({ error: error.message, retry_after: error.retryAfter }, 429);
     if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
     throw error;
   }
@@ -743,6 +795,7 @@ api.post("/threads/:id/draft", async (c) => {
     const runId = await enqueueDraftRun(c.env, threadId, latestMessage.id, { retryFailed: true });
     return c.json({ ok: true, run_id: runId }, 202);
   } catch (error) {
+    if (error instanceof UsageLimitError) return c.json({ error: error.message, retry_after: error.retryAfter }, 429);
     if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
     throw error;
   }
@@ -774,6 +827,7 @@ api.post("/threads/:id/draft/revise", async (c) => {
     });
     return c.json(draft);
   } catch (error) {
+    if (error instanceof UsageLimitError) return c.json({ error: error.message, retry_after: error.retryAfter }, 429);
     if (error instanceof AiConfigurationError) return c.json({ error: error.message }, 503);
     if (error instanceof DraftRevisionError)
       return c.json({ error: error.message }, error.status);
@@ -843,60 +897,42 @@ api.post("/threads/:id/unarchive", async (c) => {
   return c.json({ ok: true });
 });
 
-api.post("/threads/:id/reply", async (c) => {
+const replyInput = z.object({
+  text: z.string().trim().max(MAX_MESSAGE_CHARS).default(""),
+  draft_id: z.coerce.number().int().positive().optional(),
+  attempt_id: z.string().min(1).max(120).regex(/^[a-zA-Z0-9_-]+$/),
+  inbound_message_id: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  expected_recipients: z.array(z.email().max(254)).min(1).max(20),
+});
+
+api.post("/threads/:id/reply", bodyLimit({ maxSize: 4 * 1024 * 1024 }), async (c) => {
   const threadId = parsePositiveId(c.req.param("id"));
   if (threadId === null) return c.json({ error: "Invalid conversation" }, 400);
-
-  let text = "";
-  let draftId: number | undefined;
-  let attemptId = "";
-  const attachments: OutboundAttachmentInput[] = [];
-  if ((c.req.header("content-type") ?? "").includes("multipart/form-data")) {
-    const form = await c.req.formData();
-    const formText = form.get("text");
-    const formDraft = form.get("draft_id");
-    const formAttempt = form.get("attempt_id");
-    text = typeof formText === "string" ? formText : "";
-    attemptId = typeof formAttempt === "string" ? formAttempt : "";
-    if (formDraft !== null && formDraft !== "") {
-      const parsed = Number(formDraft);
-      draftId = Number.isInteger(parsed) ? parsed : Number.NaN;
-    }
-    for (const value of form.getAll("attachments")) {
-      if (value instanceof File) {
-        attachments.push({
-          filename: value.name,
-          contentType: value.type,
-          disposition: "attachment",
-          content: await value.arrayBuffer(),
-        });
-      }
-    }
-  } else {
-    const body = await c.req.json<{
-      text?: string;
-      draft_id?: number;
-      attempt_id?: string;
-    }>();
-    text = body.text ?? "";
-    draftId = body.draft_id;
-    attemptId = body.attempt_id ?? "";
-  }
-
-  if (!text.trim() && attachments.length === 0) {
-    return c.json({ error: "text is required" }, 400);
-  }
-  if (
-    !attemptId ||
-    attemptId.length > 120 ||
-    !/^[a-zA-Z0-9_-]+$/.test(attemptId)
-  ) {
-    return c.json({ error: "attempt_id is required" }, 400);
-  }
-  if (draftId !== undefined && (!Number.isInteger(draftId) || draftId <= 0)) {
-    return c.json({ error: "invalid draft_id" }, 400);
-  }
-
+  let input: unknown;
+  let files: File[] = [];
+  try {
+    if ((c.req.header("content-type") ?? "").includes("multipart/form-data")) {
+      const form = await c.req.formData();
+      const values = form.getAll("attachments");
+      if (values.some(value => !(value instanceof File) || value.size === 0)) return c.json({ error: "Invalid attachments" }, 400);
+      files = values as File[];
+      input = {
+        text: form.get("text") ?? "", attempt_id: form.get("attempt_id"),
+        ...(form.get("draft_id") ? { draft_id: form.get("draft_id") } : {}),
+        inbound_message_id: form.get("inbound_message_id"),
+        expected_recipients: JSON.parse(String(form.get("expected_recipients") ?? "null")),
+      };
+    } else input = await c.req.json();
+  } catch { return c.json({ error: "Invalid reply request" }, 400); }
+  const parsed = replyInput.safeParse(input);
+  if (!parsed.success) return c.json({ error: "Invalid reply or recipient snapshot. Reload the conversation and check the message length." }, 400);
+  if (files.length > MAX_ATTACHMENTS_PER_MESSAGE || files.reduce((size, file) => size + file.size, 0) > MAX_ATTACHMENT_TOTAL_BYTES)
+    return c.json({ error: "Attach up to 10 files, totaling no more than 3 MB" }, 400);
+  const { text, attempt_id: attemptId, draft_id: draftId } = parsed.data;
+  if (!text && files.length === 0) return c.json({ error: "text is required" }, 400);
+  const attachments: OutboundAttachmentInput[] = await Promise.all(files.map(async file => ({
+    filename: file.name, contentType: file.type, content: await file.arrayBuffer(),
+  })));
   try {
     const result = await sendReplyAttempt(c.env, {
       attemptId,
@@ -904,6 +940,8 @@ api.post("/threads/:id/reply", async (c) => {
       text,
       attachments,
       draftId,
+      inboundMessageId: parsed.data.inbound_message_id,
+      expectedRecipients: parsed.data.expected_recipients,
     });
     if (result.status === "failed") return c.json(result, 502);
     if (result.status === "pending" || result.status === "sending")

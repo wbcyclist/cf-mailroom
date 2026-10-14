@@ -112,6 +112,7 @@ export interface Attachment {
 }
 
 export interface Message {
+  has_full_body?: boolean;
   id: number;
   thread_id: number;
   direction: "inbound" | "outbound";
@@ -141,13 +142,20 @@ export interface Draft {
 }
 
 export interface ThreadDetail {
+  next_before: number | null;
+  reply_target: ReplyTarget | null;
   thread: ThreadSummary;
   messages: Message[];
   drafts: Draft[];
   draft_run: DraftRun | null;
 }
 
-export type DraftRunStatus = "queued" | "generating" | "ready" | "failed" | "superseded";
+export interface ReplyTarget {
+  inbound_message_id: number;
+  expected_recipients: string[];
+}
+
+export type DraftRunStatus = "queued" | "generating" | "ready" | "failed" | "superseded" | "deferred";
 
 export interface DraftRun {
   id: number;

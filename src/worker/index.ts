@@ -5,6 +5,8 @@ import { api } from "./api/index.ts";
 import { requireWebAccess } from "./api/access.ts";
 import { processDraftRun } from "./agent/draft.ts";
 import { receiveEmail } from "./email/receive.ts";
+import { resumeDeferredDraftRuns } from "./agent/runs.ts";
+import { AiConfigurationError } from "./ai-model.ts";
 
 const app = new Hono<{ Bindings: Env }>();
 app.use("/api/*", requireWebAccess);
@@ -24,7 +26,7 @@ export default {
     );
   },
   async queue(
-    batch: MessageBatch<{ runId: number }>,
+    batch: MessageBatch<{ runId: number; dispatchId: string }>,
     env: WorkerEnv,
     ctx: ExecutionContext,
   ): Promise<void> {
@@ -32,7 +34,7 @@ export default {
       Promise.all(
         batch.messages.map(async (message) => {
           try {
-            await processDraftRun(scopedEnv, message.body.runId);
+            if (message.body.dispatchId) await processDraftRun(scopedEnv, message.body.runId, message.body.dispatchId);
             message.ack();
           } catch {
             message.retry({
@@ -43,4 +45,10 @@ export default {
       ),
     );
   },
-} satisfies ExportedHandler<WorkerEnv, { runId: number }>;
+  async scheduled(_event, env, ctx) {
+    await withDatabase(env, ctx, async (scopedEnv) => {
+      try { await resumeDeferredDraftRuns(scopedEnv); }
+      catch (error) { if (!(error instanceof AiConfigurationError)) throw error; }
+    });
+  },
+} satisfies ExportedHandler<WorkerEnv, { runId: number; dispatchId: string }>;
