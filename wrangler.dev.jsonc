@@ -24,17 +24,12 @@
       "id": "local-oauth"
     }
   ],
-  "d1_databases": [
+  "hyperdrive": [
     {
-      "binding": "DB",
-      "database_name": "mailroom",
-      "migrations_dir": "migrations"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "RAW",
-      "bucket_name": "mailroom-raw"
+      "binding": "HYPERDRIVE",
+      // Replace with the ID of a Hyperdrive config with query caching disabled.
+      "id": "00000000000000000000000000000000",
+      "localConnectionString": "postgresql://mailroom:mailroom_local@127.0.0.1:55432/mailroom"
     }
   ],
   "queues": {

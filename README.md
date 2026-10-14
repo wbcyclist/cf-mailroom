@@ -5,7 +5,8 @@ through a Gmail-style web UI; agents read and send through MCP. Inbound mail
 can be triaged with automatic labels and answered by an agent-drafted reply,
 held for one-click human approval.
 
-Runs entirely on Cloudflare: Workers, Email Routing, D1, R2, and Web Push.
+Runs on Cloudflare Workers and Email Routing, with PostgreSQL on your VPS through Hyperdrive.
+Mail metadata, raw MIME, and attachments are stored in PostgreSQL.
 
 ![Mailroom: three inboxes in one workspace, with an agent draft awaiting approval](docs/screenshot.png)
 
@@ -34,31 +35,24 @@ Runs entirely on Cloudflare: Workers, Email Routing, D1, R2, and Web Push.
 - **Automatic labels**: natural-language rules that tag incoming mail.
 - **MCP for external agents**: agents can read conversations, reply, and send new mail through scoped OAuth access, with idempotent sends and a daily limit.
 
-**Self-hosted on Cloudflare**
+**Self-hosted storage**
 
-- **Your account, your data**: runs on Workers, D1, R2, and Queues in your own Cloudflare account.
-- **One-click deploy**: resources and database migrations are provisioned automatically.
+- **Your account, your data**: mail and files stay in your PostgreSQL database; Workers and Queues run in your Cloudflare account.
+- **Git-based deployment**: configure Hyperdrive once; each production build applies PostgreSQL migrations.
 - **Protected by Cloudflare Access**: the web app and MCP consent share one sign-in, and the API fails closed.
 
 ## Deploy
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wong2/cf-mailroom)
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wbcyclist/cf-mailroom)
 
-**Requirements:** a domain on Cloudflare, R2 enabled, and Workers Paid for
-outbound email. The deploy button requires this repository to be public.
+**Requirements:** PostgreSQL on a VPS, a Cloudflare domain, and Workers Paid for
+outbound email. Create Hyperdrive with query caching disabled and configure the
+build-only `DATABASE_URL` before the first deployment. The button above imports
+the repository; it does not provision PostgreSQL.
 
-1. **Deploy** with the button. Storage, queues, and OAuth KV are provisioned
-   for you, and database migrations run automatically.
-2. **Protect the app.** Open it and follow the setup screen to turn on
-   Cloudflare Access; the API rejects every request until this is done.
-3. **Connect your email domain.** Enable Email Routing (inbound) and Email
-   Sending (outbound), add an Inbox in **Settings**, then route that address
-   to the Worker with **Send to Worker**.
-4. **Optional:** connect an agent over MCP and enable browser notifications
-   under **Settings → General**.
-
-Every step, plus updates, manual setup, and troubleshooting, is in the
-**[deployment guide](docs/deployment.md)**.
+Follow [deployment setup](docs/deployment.md) to configure the database, Hyperdrive,
+Access, and email routing. This version starts with a fresh PostgreSQL database;
+it does not import D1 or R2 data.
 
 ## How it works
 
@@ -66,7 +60,7 @@ One Worker serves the web app, the API, inbound email, the draft queue, and the
 MCP server.
 
 ```
-inbound email ──► Email Routing ──► email() handler ──► D1 + R2 (raw MIME / attachments)
+inbound email ──► Email Routing ──► email() handler ──► Hyperdrive → PostgreSQL (metadata / MIME / attachments)
                                                           │
                                               Queue ──► Draft Run ──► Agent Draft
                                                           │
@@ -86,9 +80,9 @@ new inbound Message ──► Web Push ──► subscribed browsers
 - **Threading** follows RFC headers (`In-Reply-To` / `References`) with a
   sender-aware, reply-only normalized-subject fallback. New inbound mail
   reopens an archived Conversation.
-- **Attachments and Reply-To**: inbound files are stored in R2 and downloadable
+- **Attachments and Reply-To**: inbound files are stored as PostgreSQL binary data and downloadable
   from the Conversation. Outbound replies and new mail can carry attachments
-  (≤3 MB total, staged in R2 alongside the attempt), and replies prefer the
+  (≤3 MB total, stored in PostgreSQL with the attempt), and replies prefer the
   sender's `Reply-To` address.
 - **Auto labels**: each Inbox can define labels (e.g. `guest-post`,
   `link-exchange`) with a natural-language match condition. New inbound mail is
@@ -177,13 +171,14 @@ application as the web UI. See
 
 ## Local development
 
-Requires Node.js 22.18+ or 24+.
+Requires Node.js 22.18+ or 24+ and Docker Compose.
 
 ```sh
 npm ci
 cp .dev.vars.example .dev.vars
 
-# Local resources are emulated; no Cloudflare login or resource creation needed.
+# PostgreSQL runs locally; the other bindings use local emulation.
+npm run db:start
 npm run db:migrate:local
 npm run db:seed:local
 npm run dev
@@ -192,6 +187,11 @@ npm run dev
 Local development uses `wrangler.dev.jsonc`, which omits the AI and outbound
 email bindings. Inbound handling, the API, and the web UI remain available;
 sending a real reply requires the deployed Worker.
+
+Tests use isolated temporary PostgreSQL schemas. Set `TEST_DATABASE_URL` to use
+a separate test server. They do not reset the development database. The local
+connection URL is in `wrangler.dev.jsonc`; the migration and seed commands use
+the database from `compose.yaml`.
 
 ### Test the inbound pipeline
 
@@ -211,7 +211,7 @@ These POST the `.eml` files in `scripts/` to the local email handler. Use
 
 ```sh
 npm run check   # TypeScript
-npm test        # unit tests in tests/
+npm test        # unit and PostgreSQL integration tests (requires db:start)
 ```
 
 ### Web routes
@@ -232,7 +232,7 @@ src/web/      React SPA
 src/worker/   Worker: API, inbound email, drafting agent, notifications
 src/mcp/      MCP server and OAuth authorization
 src/shared/   Code shared by the web app and Worker
-migrations/   D1 schema migrations
+migrations/postgres/  PostgreSQL schema migrations
 scripts/      Deploy script, seed data, and test emails
 docs/         Deployment guide
 ```

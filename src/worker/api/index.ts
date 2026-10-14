@@ -1,3 +1,5 @@
+import { getFile } from "../files.ts";
+import { isUniqueViolation, statement } from "../database.ts";
 import { Hono } from "hono";
 import { requireSameOrigin } from "./csrf.ts";
 import { composeApi } from "./compose.ts";
@@ -5,20 +7,16 @@ import {
   DraftRevisionError,
   MAX_REVISION_INSTRUCTION_CHARS,
   reviseDraft,
-} from "../agent/draft";
-import { enqueueDraftRun } from "../agent/runs";
-import { parseAiModel } from "../../shared/ai-model";
+} from "../agent/draft.ts";
+import { enqueueDraftRun } from "../agent/runs.ts";
+import { parseAiModel } from "../../shared/ai-model.ts";
 import {
   AttachmentInputError,
   type OutboundAttachmentInput,
-} from "../email/attachments";
-import { ReplyIntentError, sendReplyAttempt } from "../email/reply";
-import {
-  deleteInbox,
-  InboxDeletionError,
-  purgeInboxObjects,
-} from "../inbox/delete";
-import { validatePushSubscription } from "../notifications/push";
+} from "../email/attachments.ts";
+import { ReplyIntentError, sendReplyAttempt } from "../email/reply.ts";
+import { deleteInbox, InboxDeletionError } from "../inbox/delete.ts";
+import { validatePushSubscription } from "../notifications/push.ts";
 import type {
   Attachment,
   BrowserPushSubscription,
@@ -31,7 +29,7 @@ import type {
   Message,
   PlaybookInput,
   ThreadLabel,
-} from "../../shared/types";
+} from "../../shared/types.ts";
 
 export const api = new Hono<{ Bindings: Env }>();
 api.use("*", requireSameOrigin);
@@ -39,17 +37,23 @@ api.route("/compose", composeApi);
 
 api.get("/settings/general", async (c) => {
   const [settings, subscriptions] = await Promise.all([
-    c.env.DB.prepare(
+    c.env.DB.one<{
+      browser_notifications_enabled: number;
+      ai_model: string | null;
+    }>(
       "SELECT browser_notifications_enabled, ai_model FROM global_settings WHERE id = 1",
-    ).first<{ browser_notifications_enabled: number; ai_model: string | null }>(),
-    c.env.DB.prepare("SELECT COUNT(*) AS count FROM push_subscriptions")
-      .first<{ count: number }>(),
+    ),
+    c.env.DB.one<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM push_subscriptions",
+    ),
   ]);
   const configured = Boolean(
     c.env.VAPID_PUBLIC_KEY && c.env.VAPID_PRIVATE_JWK && c.env.VAPID_SUBJECT,
   );
   const result: GeneralSettings = {
-    browser_notifications_enabled: Boolean(settings?.browser_notifications_enabled),
+    browser_notifications_enabled: Boolean(
+      settings?.browser_notifications_enabled,
+    ),
     browser_notifications_configured: configured,
     push_subscription_count: Number(subscriptions?.count ?? 0),
     vapid_public_key: configured ? c.env.VAPID_PUBLIC_KEY! : null,
@@ -63,87 +67,93 @@ api.patch("/settings/general", async (c) => {
   if (!("ai_model" in body)) return c.json({ error: "Nothing to update" }, 400);
   const parsed = parseAiModel(body.ai_model);
   if ("error" in parsed) return c.json({ error: parsed.error }, 400);
-  await c.env.DB.prepare(
+  await c.env.DB.query(
     `UPDATE global_settings
-     SET ai_model = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     SET ai_model = $1, updated_at = now()
      WHERE id = 1`,
-  )
-    .bind(parsed.model)
-    .run();
+    [parsed.model],
+  );
   return c.json({ ok: true, ai_model: parsed.model });
 });
 
 api.post("/settings/browser-notifications", async (c) => {
-  if (!c.env.VAPID_PUBLIC_KEY || !c.env.VAPID_PRIVATE_JWK || !c.env.VAPID_SUBJECT) {
-    return c.json({ error: "Browser notifications are not configured on this server" }, 503);
+  if (
+    !c.env.VAPID_PUBLIC_KEY ||
+    !c.env.VAPID_PRIVATE_JWK ||
+    !c.env.VAPID_SUBJECT
+  ) {
+    return c.json(
+      { error: "Browser notifications are not configured on this server" },
+      503,
+    );
   }
 
   const subscription = await c.req.json<BrowserPushSubscription>();
   if (!validatePushSubscription(subscription)) {
-    return c.json({ error: "The browser returned an invalid Push Subscription" }, 400);
+    return c.json(
+      { error: "The browser returned an invalid Push Subscription" },
+      400,
+    );
   }
 
   const userAgent = c.req.header("User-Agent")?.slice(0, 512) ?? null;
   await c.env.DB.batch([
-    c.env.DB.prepare(
+    statement(
       `INSERT INTO push_subscriptions
          (endpoint, expiration_time, p256dh, auth, user_agent)
-       VALUES (?, ?, ?, ?, ?)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT(endpoint) DO UPDATE SET
          expiration_time = excluded.expiration_time,
          p256dh = excluded.p256dh,
          auth = excluded.auth,
          user_agent = excluded.user_agent,
-         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')`,
-    ).bind(
-      subscription.endpoint,
-      subscription.expirationTime ?? null,
-      subscription.keys.p256dh,
-      subscription.keys.auth,
-      userAgent,
+         updated_at = now()`,
+      [
+        subscription.endpoint,
+        subscription.expirationTime ?? null,
+        subscription.keys.p256dh,
+        subscription.keys.auth,
+        userAgent,
+      ],
     ),
-    c.env.DB.prepare(
-      `UPDATE global_settings
+    statement(`UPDATE global_settings
        SET browser_notifications_enabled = 1,
-           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = 1`,
-    ),
+           updated_at = now()
+       WHERE id = 1`),
   ]);
   return c.json({ ok: true });
 });
 
 api.delete("/settings/browser-notifications", async (c) => {
   await c.env.DB.batch([
-    c.env.DB.prepare(
-      `UPDATE global_settings
+    statement(`UPDATE global_settings
        SET browser_notifications_enabled = 0,
-           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = 1`,
-    ),
-    c.env.DB.prepare("DELETE FROM push_subscriptions"),
+           updated_at = now()
+       WHERE id = 1`),
+    statement("DELETE FROM push_subscriptions"),
   ]);
   return c.json({ ok: true });
 });
 
 api.get("/mailboxes", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT m.*,
+  const { rows: results } = await c.env.DB.query<
+    Omit<Mailbox, "has_received"> & { has_received: boolean }
+  >(`SELECT m.*,
        (SELECT COUNT(*) FROM threads t
         WHERE t.mailbox_id = m.id AND t.is_read = 0 AND t.status != 'archived') AS unread_count,
        EXISTS (SELECT 1 FROM threads t JOIN messages msg ON msg.thread_id = t.id
         WHERE t.mailbox_id = m.id AND msg.direction = 'inbound') AS has_received
-     FROM mailboxes m ORDER BY m.address`,
-  ).all<Omit<Mailbox, "has_received"> & { has_received: number }>();
-  return c.json(results.map((row) => ({ ...row, has_received: row.has_received === 1 })));
+     FROM mailboxes m ORDER BY m.address`);
+  return c.json(
+    results.map((row) => ({ ...row, has_received: Boolean(row.has_received) })),
+  );
 });
 
 api.get("/domains", async (c) => {
-  const { results } = await c.env.DB.prepare(
-    `SELECT d.*,
+  const { rows: results } = await c.env.DB.query<Domain>(`SELECT d.*,
        (SELECT COUNT(*) FROM mailboxes m WHERE m.domain_id = d.id) AS inbox_count
      FROM domains d
-     ORDER BY d.name`,
-  ).all<Domain>();
+     ORDER BY d.name`);
   return c.json(results);
 });
 
@@ -154,20 +164,18 @@ api.post("/domains", async (c) => {
     return c.json({ error: "Enter a valid domain, such as example.com" }, 400);
   }
 
-  const existing = await c.env.DB.prepare(
+  const existing = await c.env.DB.one<Domain>(
     `SELECT d.*,
        (SELECT COUNT(*) FROM mailboxes m WHERE m.domain_id = d.id) AS inbox_count
-     FROM domains d WHERE d.name = ?`,
-  )
-    .bind(name)
-    .first<Domain>();
+     FROM domains d WHERE d.name = $1`,
+    [name],
+  );
   if (existing) return c.json(existing);
 
-  const domain = await c.env.DB.prepare(
-    `INSERT INTO domains (name) VALUES (?) RETURNING *`,
-  )
-    .bind(name)
-    .first<Domain>();
+  const domain = await c.env.DB.one<Domain>(
+    `INSERT INTO domains (name) VALUES ($1) RETURNING *`,
+    [name],
+  );
   return c.json({ ...domain!, inbox_count: 0 }, 201);
 });
 
@@ -175,13 +183,12 @@ api.post("/domains/:id/activate", async (c) => {
   const id = parsePositiveId(c.req.param("id"));
   if (id === null) return c.json({ error: "Invalid domain" }, 400);
 
-  const domain = await c.env.DB.prepare(
+  const domain = await c.env.DB.one<Domain>(
     `UPDATE domains
-     SET status = 'active', activated_at = COALESCE(activated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-     WHERE id = ? RETURNING *`,
-  )
-    .bind(id)
-    .first<Domain>();
+     SET status = 'active', activated_at = COALESCE(activated_at, now())
+     WHERE id = $1 RETURNING *`,
+    [id],
+  );
   if (!domain) return c.json({ error: "Domain not found" }, 404);
   return c.json({ ...domain, inbox_count: 0 });
 });
@@ -192,17 +199,20 @@ api.post("/mailboxes", async (c) => {
   const domainId = Number(body.domain_id);
 
   if (!isLocalPart(localPart)) {
-    return c.json({ error: "Use letters, numbers, dots, dashes, or underscores" }, 400);
+    return c.json(
+      { error: "Use letters, numbers, dots, dashes, or underscores" },
+      400,
+    );
   }
   if (!Number.isInteger(domainId) || domainId <= 0) {
     return c.json({ error: "Choose a domain" }, 400);
   }
 
-  const domain = await c.env.DB.prepare(
-    "SELECT id, name, status FROM domains WHERE id = ?",
-  )
-    .bind(domainId)
-    .first<{ id: number; name: string; status: "pending" | "active" }>();
+  const domain = await c.env.DB.one<{
+    id: number;
+    name: string;
+    status: "pending" | "active";
+  }>("SELECT id, name, status FROM domains WHERE id = $1", [domainId]);
   if (!domain) return c.json({ error: "Domain not found" }, 404);
   if (domain.status !== "active") {
     return c.json({ error: "Finish setting up this domain first" }, 409);
@@ -210,21 +220,21 @@ api.post("/mailboxes", async (c) => {
 
   const address = `${localPart}@${domain.name}`;
 
-  const existing = await c.env.DB.prepare("SELECT id FROM mailboxes WHERE address = ?")
-    .bind(address)
-    .first();
+  const existing = await c.env.DB.one(
+    "SELECT id FROM mailboxes WHERE address = $1",
+    [address],
+  );
   if (existing) return c.json({ error: "This inbox already exists" }, 409);
 
   let mailbox: Mailbox | null;
   try {
-    mailbox = await c.env.DB.prepare(
+    mailbox = await c.env.DB.one<Mailbox>(
       `INSERT INTO mailboxes (address, domain_id)
-       VALUES (?, ?) RETURNING *`,
-    )
-      .bind(address, domain.id)
-      .first<Mailbox>();
+       VALUES ($1, $2) RETURNING *`,
+      [address, domain.id],
+    );
   } catch (error) {
-    if (error instanceof Error && error.message.includes("UNIQUE")) {
+    if (isUniqueViolation(error)) {
       return c.json({ error: "This inbox already exists" }, 409);
     }
     throw error;
@@ -244,17 +254,18 @@ api.patch("/mailboxes/:id", async (c) => {
     if (!["off", "draft", "auto"].includes(body.agent_mode)) {
       return c.json({ error: "invalid agent_mode" }, 400);
     }
-    fields.push("agent_mode = ?");
+    fields.push(`agent_mode = ${"$" + (values.length + 1)}`);
     values.push(body.agent_mode);
   }
   if (body.agent_instructions !== undefined) {
-    fields.push("agent_instructions = ?");
+    fields.push(`agent_instructions = ${"$" + (values.length + 1)}`);
     values.push(body.agent_instructions || null);
   }
   if (fields.length === 0) return c.json({ error: "no fields to update" }, 400);
-  await c.env.DB.prepare(`UPDATE mailboxes SET ${fields.join(", ")} WHERE id = ?`)
-    .bind(...values, c.req.param("id"))
-    .run();
+  await c.env.DB.query(
+    `UPDATE mailboxes SET ${fields.join(", ")} WHERE id = $${values.length + 1}`,
+    [...values, c.req.param("id")],
+  );
   return c.json({ ok: true });
 });
 
@@ -262,7 +273,9 @@ api.delete("/mailboxes/:id", async (c) => {
   const id = parsePositiveId(c.req.param("id"));
   if (id === null) return c.json({ error: "Invalid inbox" }, 400);
 
-  const body = await c.req.json<{ confirm_address?: unknown }>().catch(() => null);
+  const body = await c.req
+    .json<{ confirm_address?: unknown }>()
+    .catch(() => null);
   if (!body || typeof body.confirm_address !== "string") {
     return c.json({ error: "Type the inbox address to confirm deletion" }, 400);
   }
@@ -272,14 +285,6 @@ api.delete("/mailboxes/:id", async (c) => {
       id,
       confirmAddress: body.confirm_address,
     });
-    c.executionCtx.waitUntil(
-      purgeInboxObjects(c.env.RAW, deleted.id).catch((error) => {
-        console.error("Inbox object cleanup failed", {
-          inboxId: deleted.id,
-          error,
-        });
-      }),
-    );
     return c.json({
       ok: true,
       deleted_id: deleted.id,
@@ -298,13 +303,12 @@ api.get("/playbooks", async (c) => {
   if (!Number.isInteger(mailboxId) || mailboxId <= 0) {
     return c.json({ error: "mailbox_id is required" }, 400);
   }
-  const { results } = await c.env.DB.prepare(
+  const { rows: results } = await c.env.DB.query(
     `SELECT * FROM playbooks
-     WHERE mailbox_id = ?
+     WHERE mailbox_id = $1
      ORDER BY enabled DESC, updated_at DESC, id DESC`,
-  )
-    .bind(mailboxId)
-    .all();
+    [mailboxId],
+  );
   return c.json(results);
 });
 
@@ -313,32 +317,37 @@ api.post("/playbooks", async (c) => {
   const validation = validatePlaybook(body);
   if (validation) return c.json({ error: validation }, 400);
 
-  const playbook = await c.env.DB.prepare(
+  const playbook = await c.env.DB.one(
     `INSERT INTO playbooks
        (mailbox_id, name, when_to_use, instructions, example_reply, enabled)
-     VALUES (?, ?, ?, ?, ?, ?)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
-  )
-    .bind(
+    [
       body.mailbox_id,
       body.name.trim(),
       body.when_to_use.trim(),
       body.instructions.trim(),
       body.example_reply?.trim() || null,
       body.enabled === false ? 0 : 1,
-    )
-    .first();
+    ],
+  );
   return c.json(playbook, 201);
 });
 
 api.patch("/playbooks/:id", async (c) => {
   const id = Number(c.req.param("id"));
-  if (!Number.isInteger(id) || id <= 0) return c.json({ error: "invalid playbook id" }, 400);
+  if (!Number.isInteger(id) || id <= 0)
+    return c.json({ error: "invalid playbook id" }, 400);
 
   const body = await c.req.json<Partial<PlaybookInput>>();
   const fields: string[] = [];
   const values: unknown[] = [];
-  const textFields = ["name", "when_to_use", "instructions", "example_reply"] as const;
+  const textFields = [
+    "name",
+    "when_to_use",
+    "instructions",
+    "example_reply",
+  ] as const;
 
   for (const field of textFields) {
     if (body[field] === undefined) continue;
@@ -346,42 +355,40 @@ api.patch("/playbooks/:id", async (c) => {
     if (field !== "example_reply" && !value) {
       return c.json({ error: `${field} cannot be empty` }, 400);
     }
-    fields.push(`${field} = ?`);
+    fields.push(`${field} = $${values.length + 1}`);
     values.push(value || null);
   }
   if (body.enabled !== undefined) {
-    fields.push("enabled = ?");
+    fields.push(`enabled = ${"$" + (values.length + 1)}`);
     values.push(body.enabled ? 1 : 0);
   }
   if (fields.length === 0) return c.json({ error: "no fields to update" }, 400);
 
-  fields.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
-  const playbook = await c.env.DB.prepare(
-    `UPDATE playbooks SET ${fields.join(", ")} WHERE id = ? RETURNING *`,
-  )
-    .bind(...values, id)
-    .first();
+  fields.push("updated_at = now()");
+  const playbook = await c.env.DB.one(
+    `UPDATE playbooks SET ${fields.join(", ")} WHERE id = $${values.length + 1} RETURNING *`,
+    [...values, id],
+  );
   if (!playbook) return c.json({ error: "playbook not found" }, 404);
   return c.json(playbook);
 });
 
 api.delete("/playbooks/:id", async (c) => {
-  const result = await c.env.DB.prepare("DELETE FROM playbooks WHERE id = ?")
-    .bind(c.req.param("id"))
-    .run();
-  if (!result.meta.changes) return c.json({ error: "playbook not found" }, 404);
+  const result = await c.env.DB.query("DELETE FROM playbooks WHERE id = $1", [
+    c.req.param("id"),
+  ]);
+  if (!result.rowCount) return c.json({ error: "playbook not found" }, 404);
   return c.json({ ok: true });
 });
 
 api.get("/labels", async (c) => {
   const mailboxId = Number(c.req.query("mailbox_id") ?? 0);
-  const { results } = await c.env.DB.prepare(
+  const { rows: results } = await c.env.DB.query<Label>(
     `SELECT * FROM labels
-     WHERE (? = 0 OR mailbox_id = ?)
+     WHERE ($1 = 0 OR mailbox_id = $2)
      ORDER BY mailbox_id, name`,
-  )
-    .bind(mailboxId, mailboxId)
-    .all<Label>();
+    [mailboxId, mailboxId],
+  );
   return c.json(results);
 });
 
@@ -390,34 +397,34 @@ api.post("/labels", async (c) => {
   const validation = validateLabel(body);
   if (validation) return c.json({ error: validation }, 400);
 
-  const mailbox = await c.env.DB.prepare("SELECT id FROM mailboxes WHERE id = ?")
-    .bind(body.mailbox_id)
-    .first();
+  const mailbox = await c.env.DB.one("SELECT id FROM mailboxes WHERE id = $1", [
+    body.mailbox_id,
+  ]);
   if (!mailbox) return c.json({ error: "Inbox not found" }, 404);
 
-  const count = await c.env.DB.prepare(
-    "SELECT COUNT(*) AS count FROM labels WHERE mailbox_id = ?",
-  )
-    .bind(body.mailbox_id)
-    .first<{ count: number }>();
+  const count = await c.env.DB.one<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM labels WHERE mailbox_id = $1",
+    [body.mailbox_id],
+  );
   if (Number(count?.count ?? 0) >= MAX_LABELS_PER_MAILBOX) {
     return c.json(
-      { error: `This inbox already has the maximum of ${MAX_LABELS_PER_MAILBOX} labels` },
+      {
+        error: `This inbox already has the maximum of ${MAX_LABELS_PER_MAILBOX} labels`,
+      },
       409,
     );
   }
 
   try {
-    const label = await c.env.DB.prepare(
+    const label = await c.env.DB.one<Label>(
       `INSERT INTO labels (mailbox_id, name, condition)
-       VALUES (?, ?, ?)
+       VALUES ($1, $2, $3)
        RETURNING *`,
-    )
-      .bind(body.mailbox_id, body.name.trim(), body.condition.trim())
-      .first<Label>();
+      [body.mailbox_id, body.name.trim(), body.condition.trim()],
+    );
     return c.json(label, 201);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("UNIQUE")) {
+    if (isUniqueViolation(error)) {
       return c.json({ error: "A label with this name already exists" }, 409);
     }
     throw error;
@@ -435,22 +442,21 @@ api.patch("/labels/:id", async (c) => {
     if (body[field] === undefined) continue;
     const value = body[field]?.trim() ?? "";
     if (!value) return c.json({ error: `${field} cannot be empty` }, 400);
-    fields.push(`${field} = ?`);
+    fields.push(`${field} = $${values.length + 1}`);
     values.push(value);
   }
   if (fields.length === 0) return c.json({ error: "no fields to update" }, 400);
 
-  fields.push("updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')");
+  fields.push("updated_at = now()");
   try {
-    const label = await c.env.DB.prepare(
-      `UPDATE labels SET ${fields.join(", ")} WHERE id = ? RETURNING *`,
-    )
-      .bind(...values, id)
-      .first<Label>();
+    const label = await c.env.DB.one<Label>(
+      `UPDATE labels SET ${fields.join(", ")} WHERE id = $${values.length + 1} RETURNING *`,
+      [...values, id],
+    );
     if (!label) return c.json({ error: "label not found" }, 404);
     return c.json(label);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("UNIQUE")) {
+    if (isUniqueViolation(error)) {
       return c.json({ error: "A label with this name already exists" }, 409);
     }
     throw error;
@@ -461,10 +467,10 @@ api.delete("/labels/:id", async (c) => {
   const id = parsePositiveId(c.req.param("id"));
   if (id === null) return c.json({ error: "invalid label id" }, 400);
   const results = await c.env.DB.batch([
-    c.env.DB.prepare("DELETE FROM thread_labels WHERE label_id = ?").bind(id),
-    c.env.DB.prepare("DELETE FROM labels WHERE id = ?").bind(id),
+    statement("DELETE FROM thread_labels WHERE label_id = $1", [id]),
+    statement("DELETE FROM labels WHERE id = $1", [id]),
   ]);
-  if (!results[1].meta.changes) return c.json({ error: "label not found" }, 404);
+  if (!results[1].rowCount) return c.json({ error: "label not found" }, 404);
   return c.json({ ok: true });
 });
 
@@ -473,25 +479,28 @@ api.get("/threads", async (c) => {
   const labelId = c.req.query("label_id");
   const status = c.req.query("status") ?? "open";
   if (!["open", "archived", "needs_human"].includes(status)) {
-    return c.json({ error: "status must be open, archived or needs_human" }, 400);
+    return c.json(
+      { error: "status must be open, archived or needs_human" },
+      400,
+    );
   }
   const beforeAt = c.req.query("before_at") ?? "";
   const beforeId = parsePositiveId(c.req.query("before_id") ?? "") ?? 0;
   const conditions = [
-    "t.status = ?2",
-    "(?3 = 0 OR EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = ?3))",
-    "(?4 = '' OR t.last_message_at < ?4 OR (t.last_message_at = ?4 AND t.id < ?5))",
+    "t.status = $2",
+    "($3 = 0 OR EXISTS (SELECT 1 FROM thread_labels tl WHERE tl.thread_id = t.id AND tl.label_id = $3))",
+    "($4::timestamptz IS NULL OR t.last_message_at < $4 OR (t.last_message_at = $4 AND t.id < $5))",
   ];
-  if (mailboxId) conditions.push("t.mailbox_id = ?1");
+  conditions.push("($1::bigint = 0 OR t.mailbox_id = $1)");
   if (c.req.query("unread") === "1") conditions.push("t.is_read = 0");
-  const { results } = await c.env.DB.prepare(
+  const { rows: results } = await c.env.DB.query(
     `SELECT t.*, m.address AS mailbox_address, m.color AS mailbox_color,
        m.agent_mode AS mailbox_agent_mode,
        COALESCE(
          latest_inbound.from_name,
          latest_inbound.from_address,
          CASE WHEN latest_message.direction = 'outbound'
-           THEN 'To: ' || COALESCE(json_extract(latest_message.to_addresses, '$[0]'), '')
+           THEN 'To: ' || COALESCE((latest_message.to_addresses::jsonb ->> 0), '')
          END
        ) AS last_from,
        latest_inbound.from_address AS last_from_address,
@@ -520,24 +529,26 @@ api.get("/threads", async (c) => {
      )
      WHERE ${conditions.join(" AND ")}
      ORDER BY t.last_message_at DESC, t.id DESC LIMIT ${THREAD_PAGE_SIZE}`,
-  )
-    .bind(mailboxId ?? 0, status, labelId ?? 0, beforeAt, beforeId)
-    .all();
-  const rows = results as unknown as Array<{ id: number; labels: ThreadLabel[] }>;
+    [mailboxId ?? 0, status, labelId ?? 0, beforeAt || null, beforeId],
+  );
+  const rows = results as unknown as Array<{
+    id: number;
+    labels: ThreadLabel[];
+  }>;
   await attachLabels(c.env, rows);
   return c.json(rows);
 });
 
 api.get("/threads/:id", async (c) => {
   const id = c.req.param("id");
-  const thread = await c.env.DB.prepare(
+  const thread = await c.env.DB.one(
     `SELECT t.*, m.address AS mailbox_address, m.color AS mailbox_color,
        m.agent_mode AS mailbox_agent_mode,
        COALESCE(
          latest_inbound.from_name,
          latest_inbound.from_address,
          CASE WHEN latest_message.direction = 'outbound'
-           THEN 'To: ' || COALESCE(json_extract(latest_message.to_addresses, '$[0]'), '')
+           THEN 'To: ' || COALESCE((latest_message.to_addresses::jsonb ->> 0), '')
          END
        ) AS last_from,
        latest_inbound.from_address AS last_from_address,
@@ -564,53 +575,54 @@ api.get("/threads/:id", async (c) => {
        WHERE dr.inbound_message_id = latest_inbound.id
        ORDER BY dr.created_at DESC, dr.id DESC LIMIT 1
      )
-     WHERE t.id = ?`,
-  )
-    .bind(id)
-    .first();
+     WHERE t.id = $1`,
+    [id],
+  );
   if (!thread) return c.json({ error: "thread not found" }, 404);
   await attachLabels(c.env, [thread as { id: number; labels: ThreadLabel[] }]);
 
   const [messages, drafts, draftRun] = await Promise.all([
-    c.env.DB.prepare("SELECT * FROM messages WHERE thread_id = ? ORDER BY created_at").bind(id).all(),
-    c.env.DB.prepare(
+    c.env.DB.query(
+      `SELECT id, thread_id, message_id, in_reply_to, references_ids, direction, sent_by,
+        from_address, from_name, to_addresses, cc_addresses, reply_to_addresses, subject,
+        text_body, html_body, raw_key, is_auto_submitted, created_at
+       FROM messages WHERE thread_id = $1 ORDER BY created_at, id`,
+      [id],
+    ),
+    c.env.DB.query(
       `SELECT d.*, p.name AS playbook_name
        FROM drafts d LEFT JOIN playbooks p ON p.id = d.playbook_id
-       WHERE d.thread_id = ? AND d.status = 'pending'
+       WHERE d.thread_id = $1 AND d.status = 'pending'
          AND d.source_inbound_message_id = (
            SELECT id FROM messages
-           WHERE thread_id = ? AND direction = 'inbound'
+           WHERE thread_id = $2 AND direction = 'inbound'
            ORDER BY created_at DESC, id DESC LIMIT 1
          )
        ORDER BY d.created_at`,
-    )
-      .bind(id, id)
-      .all(),
-    c.env.DB.prepare(
+      [id, id],
+    ),
+    c.env.DB.one<DraftRun>(
       `SELECT * FROM draft_runs
        WHERE inbound_message_id = (
          SELECT id FROM messages
-         WHERE thread_id = ? AND direction = 'inbound'
+         WHERE thread_id = $1 AND direction = 'inbound'
          ORDER BY created_at DESC, id DESC LIMIT 1
        )
        ORDER BY created_at DESC, id DESC LIMIT 1`,
-    )
-      .bind(id)
-      .first<DraftRun>(),
+      [id],
+    ),
   ]);
 
-  const messageRows = messages.results as unknown as Message[];
+  const messageRows = messages.rows as unknown as Message[];
   const messageIds = messageRows.map((message) => message.id);
   let attachments: Attachment[] = [];
   if (messageIds.length > 0) {
-    const placeholders = messageIds.map(() => "?").join(", ");
-    const result = await c.env.DB.prepare(
+    const result = await c.env.DB.query<Attachment>(
       `SELECT id, message_id, filename, content_type, size, disposition, content_id
-       FROM attachments WHERE message_id IN (${placeholders}) ORDER BY id`,
-    )
-      .bind(...messageIds)
-      .all<Attachment>();
-    attachments = result.results;
+       FROM attachments WHERE message_id = ANY($1::bigint[]) ORDER BY id`,
+      [messageIds],
+    );
+    attachments = result.rows;
   }
   const attachmentsByMessage = new Map<number, Attachment[]>();
   for (const attachment of attachments) {
@@ -625,7 +637,7 @@ api.get("/threads/:id", async (c) => {
   return c.json({
     thread,
     messages: enrichedMessages,
-    drafts: drafts.results,
+    drafts: drafts.rows,
     draft_run: draftRun ?? null,
   });
 });
@@ -633,13 +645,17 @@ api.get("/threads/:id", async (c) => {
 api.get("/attachments/:id", async (c) => {
   const id = parsePositiveId(c.req.param("id"));
   if (id === null) return c.json({ error: "Invalid attachment" }, 400);
-  const attachment = await c.env.DB.prepare(
-    `SELECT filename, content_type, size, r2_key FROM attachments WHERE id = ?`,
-  )
-    .bind(id)
-    .first<{ filename: string | null; content_type: string; size: number; r2_key: string }>();
+  const attachment = await c.env.DB.one<{
+    filename: string | null;
+    content_type: string;
+    size: number;
+    file_key: string;
+  }>(
+    `SELECT filename, content_type, size, file_key FROM attachments WHERE id = $1`,
+    [id],
+  );
   if (!attachment) return c.json({ error: "Attachment not found" }, 404);
-  const object = await c.env.RAW.get(attachment.r2_key);
+  const object = await getFile(c.env.DB, attachment.file_key);
   if (!object) return c.json({ error: "Attachment file is unavailable" }, 404);
 
   const filename = attachment.filename || `attachment-${id}`;
@@ -650,22 +666,30 @@ api.get("/attachments/:id", async (c) => {
     "Cache-Control": "private, no-store",
     "X-Content-Type-Options": "nosniff",
   });
-  return new Response(object.body, { headers });
+  return new Response(object, { headers });
 });
 
 api.post("/draft-runs/:id/retry", async (c) => {
   const id = parsePositiveId(c.req.param("id"));
   if (id === null) return c.json({ error: "Invalid Draft Run" }, 400);
-  const run = await c.env.DB.prepare(
-    "SELECT id, thread_id, inbound_message_id, status FROM draft_runs WHERE id = ?",
-  )
-    .bind(id)
-    .first<{ id: number; thread_id: number; inbound_message_id: number; status: string }>();
+  const run = await c.env.DB.one<{
+    id: number;
+    thread_id: number;
+    inbound_message_id: number;
+    status: string;
+  }>(
+    "SELECT id, thread_id, inbound_message_id, status FROM draft_runs WHERE id = $1",
+    [id],
+  );
   if (!run) return c.json({ error: "Draft Run not found" }, 404);
   if (run.status === "superseded") {
-    return c.json({ error: "A newer customer message has replaced this Draft Run" }, 409);
+    return c.json(
+      { error: "A newer customer message has replaced this Draft Run" },
+      409,
+    );
   }
-  if (run.status === "ready") return c.json({ error: "This draft is already ready" }, 409);
+  if (run.status === "ready")
+    return c.json({ error: "This draft is already ready" }, 409);
   await enqueueDraftRun(c.env, run.thread_id, run.inbound_message_id);
   return c.json({ ok: true });
 });
@@ -674,27 +698,35 @@ api.post("/threads/:id/draft", async (c) => {
   const threadId = parsePositiveId(c.req.param("id"));
   if (threadId === null) return c.json({ error: "Invalid conversation" }, 400);
 
-  const thread = await c.env.DB.prepare(
+  const thread = await c.env.DB.one<{
+    id: number;
+    agent_mode: Mailbox["agent_mode"];
+  }>(
     `SELECT t.id, m.agent_mode
      FROM threads t JOIN mailboxes m ON m.id = t.mailbox_id
-     WHERE t.id = ?`,
-  )
-    .bind(threadId)
-    .first<{ id: number; agent_mode: Mailbox["agent_mode"] }>();
+     WHERE t.id = $1`,
+    [threadId],
+  );
   if (!thread) return c.json({ error: "Conversation not found" }, 404);
   if (thread.agent_mode === "off") {
     return c.json({ error: "Turn on AI drafting for this inbox first" }, 409);
   }
 
-  const latestMessage = await c.env.DB.prepare(
+  const latestMessage = await c.env.DB.one<{
+    id: number;
+    direction: "inbound" | "outbound";
+    is_auto_submitted: number;
+  }>(
     `SELECT id, direction, is_auto_submitted
-     FROM messages WHERE thread_id = ?
+     FROM messages WHERE thread_id = $1
      ORDER BY created_at DESC, id DESC LIMIT 1`,
-  )
-    .bind(threadId)
-    .first<{ id: number; direction: "inbound" | "outbound"; is_auto_submitted: number }>();
+    [threadId],
+  );
   if (!latestMessage || latestMessage.direction !== "inbound") {
-    return c.json({ error: "The latest message does not need an AI draft" }, 409);
+    return c.json(
+      { error: "The latest message does not need an AI draft" },
+      409,
+    );
   }
   if (latestMessage.is_auto_submitted) {
     return c.json({ error: "Automated messages are not drafted" }, 409);
@@ -707,26 +739,47 @@ api.post("/threads/:id/draft", async (c) => {
 api.post("/threads/:id/draft/revise", async (c) => {
   const threadId = parsePositiveId(c.req.param("id"));
   if (threadId === null) return c.json({ error: "Invalid conversation" }, 400);
-  const body = await c.req.json<{ instruction?: unknown; current_text?: unknown }>();
-  const instruction = typeof body.instruction === "string" ? body.instruction.trim() : "";
-  const currentText = typeof body.current_text === "string" ? body.current_text : "";
+  const body = await c.req.json<{
+    instruction?: unknown;
+    current_text?: unknown;
+  }>();
+  const instruction =
+    typeof body.instruction === "string" ? body.instruction.trim() : "";
+  const currentText =
+    typeof body.current_text === "string" ? body.current_text : "";
   if (instruction.length > MAX_REVISION_INSTRUCTION_CHARS) {
-    return c.json({ error: `Keep the instruction under ${MAX_REVISION_INSTRUCTION_CHARS} characters` }, 400);
+    return c.json(
+      {
+        error: `Keep the instruction under ${MAX_REVISION_INSTRUCTION_CHARS} characters`,
+      },
+      400,
+    );
   }
   try {
-    const draft = await reviseDraft(c.env, threadId, { instruction, currentText });
+    const draft = await reviseDraft(c.env, threadId, {
+      instruction,
+      currentText,
+    });
     return c.json(draft);
   } catch (error) {
-    if (error instanceof DraftRevisionError) return c.json({ error: error.message }, error.status);
+    if (error instanceof DraftRevisionError)
+      return c.json({ error: error.message }, error.status);
     console.error("Draft revision failed", error);
-    return c.json({ error: "The AI couldn’t write a new draft. Try again." }, 502);
+    return c.json(
+      { error: "The AI couldn’t write a new draft. Try again." },
+      502,
+    );
   }
 });
 
 api.post("/threads/bulk", async (c) => {
   const body = await c.req.json<{ ids?: unknown; action?: unknown }>();
   const ids = Array.isArray(body.ids)
-    ? [...new Set(body.ids.filter((id) => Number.isInteger(id) && (id as number) > 0))]
+    ? [
+        ...new Set(
+          body.ids.filter((id) => Number.isInteger(id) && (id as number) > 0),
+        ),
+      ]
     : [];
   if (ids.length === 0 || ids.length > 100) {
     return c.json({ error: "ids must contain 1-100 conversation ids" }, 400);
@@ -735,38 +788,45 @@ api.post("/threads/bulk", async (c) => {
     read: "is_read = 1",
     unread: "is_read = 0",
     archive: "status = 'archived'",
-    unarchive: "status = CASE status WHEN 'archived' THEN 'open' ELSE status END",
+    unarchive:
+      "status = CASE status WHEN 'archived' THEN 'open' ELSE status END",
   };
-  const update = typeof body.action === "string" && Object.hasOwn(updates, body.action)
-    ? updates[body.action]
-    : undefined;
-  if (!update) return c.json({ error: "action must be read, unread, archive or unarchive" }, 400);
+  const update =
+    typeof body.action === "string" && Object.hasOwn(updates, body.action)
+      ? updates[body.action]
+      : undefined;
+  if (!update)
+    return c.json(
+      { error: "action must be read, unread, archive or unarchive" },
+      400,
+    );
 
-  const placeholders = ids.map(() => "?").join(", ");
-  const result = await c.env.DB.prepare(
-    `UPDATE threads SET ${update} WHERE id IN (${placeholders})`,
-  )
-    .bind(...ids)
-    .run();
-  return c.json({ ok: true, updated: Number(result.meta.changes ?? 0) });
+  const result = await c.env.DB.query(
+    `UPDATE threads SET ${update} WHERE id = ANY($1::bigint[])`,
+    [ids],
+  );
+  return c.json({ ok: true, updated: Number(result.rowCount ?? 0) });
 });
 
 api.post("/threads/:id/read", async (c) => {
-  await c.env.DB.prepare("UPDATE threads SET is_read = 1 WHERE id = ?").bind(c.req.param("id")).run();
+  await c.env.DB.query("UPDATE threads SET is_read = 1 WHERE id = $1", [
+    c.req.param("id"),
+  ]);
   return c.json({ ok: true });
 });
 
 api.post("/threads/:id/archive", async (c) => {
-  await c.env.DB.prepare("UPDATE threads SET status = 'archived' WHERE id = ?")
-    .bind(c.req.param("id"))
-    .run();
+  await c.env.DB.query("UPDATE threads SET status = 'archived' WHERE id = $1", [
+    c.req.param("id"),
+  ]);
   return c.json({ ok: true });
 });
 
 api.post("/threads/:id/unarchive", async (c) => {
-  await c.env.DB.prepare("UPDATE threads SET status = 'open' WHERE id = ? AND status = 'archived'")
-    .bind(c.req.param("id"))
-    .run();
+  await c.env.DB.query(
+    "UPDATE threads SET status = 'open' WHERE id = $1 AND status = 'archived'",
+    [c.req.param("id")],
+  );
   return c.json({ ok: true });
 });
 
@@ -813,7 +873,11 @@ api.post("/threads/:id/reply", async (c) => {
   if (!text.trim() && attachments.length === 0) {
     return c.json({ error: "text is required" }, 400);
   }
-  if (!attemptId || attemptId.length > 120 || !/^[a-zA-Z0-9_-]+$/.test(attemptId)) {
+  if (
+    !attemptId ||
+    attemptId.length > 120 ||
+    !/^[a-zA-Z0-9_-]+$/.test(attemptId)
+  ) {
     return c.json({ error: "attempt_id is required" }, 400);
   }
   if (draftId !== undefined && (!Number.isInteger(draftId) || draftId <= 0)) {
@@ -829,7 +893,8 @@ api.post("/threads/:id/reply", async (c) => {
       draftId,
     });
     if (result.status === "failed") return c.json(result, 502);
-    if (result.status === "pending" || result.status === "sending") return c.json(result, 202);
+    if (result.status === "pending" || result.status === "sending")
+      return c.json(result, 202);
     return c.json(result);
   } catch (error) {
     if (error instanceof AttachmentInputError) {
@@ -845,9 +910,9 @@ api.post("/threads/:id/reply", async (c) => {
 });
 
 api.post("/drafts/:id/discard", async (c) => {
-  await c.env.DB.prepare("UPDATE drafts SET status = 'discarded' WHERE id = ?")
-    .bind(c.req.param("id"))
-    .run();
+  await c.env.DB.query("UPDATE drafts SET status = 'discarded' WHERE id = $1", [
+    c.req.param("id"),
+  ]);
   return c.json({ ok: true });
 });
 
@@ -856,14 +921,14 @@ api.get("/search", async (c) => {
   const mailboxId = c.req.query("mailbox_id");
   const labelId = c.req.query("label_id");
   if (!q) return c.json([]);
-  const { results } = await c.env.DB.prepare(
+  const { rows: results } = await c.env.DB.query(
     `SELECT DISTINCT t.*, m.address AS mailbox_address, m.color AS mailbox_color,
        m.agent_mode AS mailbox_agent_mode,
        COALESCE(
          latest_inbound.from_name,
          latest_inbound.from_address,
          CASE WHEN latest_message.direction = 'outbound'
-           THEN 'To: ' || COALESCE(json_extract(latest_message.to_addresses, '$[0]'), '')
+           THEN 'To: ' || COALESCE((latest_message.to_addresses::jsonb ->> 0), '')
          END
        ) AS last_from,
        latest_inbound.from_address AS last_from_address,
@@ -874,8 +939,7 @@ api.get("/search", async (c) => {
        latest_run.error AS draft_run_error,
        COALESCE(latest_inbound.is_auto_submitted, 0) AS latest_inbound_is_auto_submitted,
        latest_message.direction AS last_message_direction
-     FROM messages_fts f
-     JOIN messages msg ON msg.id = f.rowid
+     FROM messages msg
      JOIN threads t ON t.id = msg.thread_id
      JOIN mailboxes m ON m.id = t.mailbox_id
      LEFT JOIN messages latest_message ON latest_message.id = (
@@ -892,18 +956,20 @@ api.get("/search", async (c) => {
        WHERE dr.inbound_message_id = latest_inbound.id
        ORDER BY dr.created_at DESC, dr.id DESC LIMIT 1
      )
-     WHERE messages_fts MATCH ?1
-       AND (?2 = 0 OR t.mailbox_id = ?2)
-       AND (?3 = 0 OR EXISTS (
+     WHERE msg.search_document @@ websearch_to_tsquery('simple', $1)
+       AND ($2 = 0 OR t.mailbox_id = $2)
+       AND ($3 = 0 OR EXISTS (
          SELECT 1 FROM thread_labels tl
-         WHERE tl.thread_id = t.id AND tl.label_id = ?3
+         WHERE tl.thread_id = t.id AND tl.label_id = $3
        ))
-       AND (?4 = 0 OR t.is_read = 0)
+       AND ($4 = 0 OR t.is_read = 0)
      ORDER BY t.last_message_at DESC LIMIT 50`,
-  )
-    .bind(q, mailboxId ?? 0, labelId ?? 0, c.req.query("unread") === "1" ? 1 : 0)
-    .all();
-  const rows = results as unknown as Array<{ id: number; labels: ThreadLabel[] }>;
+    [q, mailboxId ?? 0, labelId ?? 0, c.req.query("unread") === "1" ? 1 : 0],
+  );
+  const rows = results as unknown as Array<{
+    id: number;
+    labels: ThreadLabel[];
+  }>;
   await attachLabels(c.env, rows);
   return c.json(rows);
 });
@@ -916,16 +982,18 @@ async function attachLabels(
   rows: Array<{ id: number; labels: ThreadLabel[] }>,
 ): Promise<void> {
   if (rows.length === 0) return;
-  const placeholders = rows.map(() => "?").join(", ");
-  const { results } = await env.DB.prepare(
+  const { rows: results } = await env.DB.query<{
+    thread_id: number;
+    id: number;
+    name: string;
+  }>(
     `SELECT tl.thread_id, l.id, l.name
      FROM thread_labels tl
      JOIN labels l ON l.id = tl.label_id
-     WHERE tl.thread_id IN (${placeholders})
+     WHERE tl.thread_id = ANY($1::bigint[])
      ORDER BY l.name`,
-  )
-    .bind(...rows.map((row) => row.id))
-    .all<{ thread_id: number; id: number; name: string }>();
+    [rows.map((row) => row.id)],
+  );
   const byThread = new Map<number, ThreadLabel[]>();
   for (const row of results) {
     const list = byThread.get(row.thread_id) ?? [];
@@ -956,22 +1024,29 @@ function validatePlaybook(body: PlaybookInput): string | null {
   if (body.name.length > 120) return "name is too long";
   if (body.when_to_use.length > 4000) return "when_to_use is too long";
   if (body.instructions.length > 12000) return "instructions are too long";
-  if ((body.example_reply?.length ?? 0) > 12000) return "example_reply is too long";
+  if ((body.example_reply?.length ?? 0) > 12000)
+    return "example_reply is too long";
   return null;
 }
 
 function normalizeDomain(value: string): string {
-  return value.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\.$/, "");
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/\.$/, "");
 }
 
 function isDomainName(name: string): boolean {
   if (name.length < 3 || name.length > 253 || !name.includes(".")) return false;
-  return name.split(".").every(
-    (label) =>
-      label.length > 0 &&
-      label.length <= 63 &&
-      /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
-  );
+  return name
+    .split(".")
+    .every(
+      (label) =>
+        label.length > 0 &&
+        label.length <= 63 &&
+        /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label),
+    );
 }
 
 function isLocalPart(value: string): boolean {

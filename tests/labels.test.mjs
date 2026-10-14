@@ -39,65 +39,78 @@ test("matchedLabelIds keeps labels at or above the match threshold", () => {
 });
 
 test("matchedLabelIds reads Cloudflare's completed result envelope", () => {
-  assert.deepEqual(matchedLabelIds(labels, {
-    state: "Completed",
-    result: {
-      model: "jev-1.13.0",
-      answers: {
-        label_1: { type: "noul", noul: 0.96 },
-        label_2: { type: "noul", noul: 0.2 },
+  assert.deepEqual(
+    matchedLabelIds(labels, {
+      state: "Completed",
+      result: {
+        model: "jev-1.13.0",
+        answers: {
+          label_1: { type: "noul", noul: 0.96 },
+          label_2: { type: "noul", noul: 0.2 },
+        },
       },
-    },
-    gatewayMetadata: { keySource: "Unified" },
-  }), [1]);
+      gatewayMetadata: { keySource: "Unified" },
+    }),
+    [1],
+  );
 });
 
 test("invalid responses fail visibly instead of silently matching nothing", () => {
-  for (const response of [null, {}, { answers: {} }, { state: "Completed", result: null },
+  for (const response of [
+    null,
+    {},
+    { answers: {} },
+    { state: "Completed", result: null },
     { state: "Failed", result: { answers: { label_1: { noul: 1 } } } },
     { state: "Running" },
   ]) {
-    assert.throws(() => matchedLabelIds(labels, response), /Invalid JEV response/);
+    assert.throws(
+      () => matchedLabelIds(labels, response),
+      /Invalid JEV response/,
+    );
   }
   for (const noul of ["yes", null, NaN, Infinity, -0.1, 1.1]) {
-    assert.throws(() => matchedLabelIds(labels, {
-      answers: { label_1: { noul }, label_2: { noul: 0 } },
-    }), /Invalid JEV response/);
+    assert.throws(
+      () =>
+        matchedLabelIds(labels, {
+          answers: { label_1: { noul }, label_2: { noul: 0 } },
+        }),
+      /Invalid JEV response/,
+    );
   }
 });
 
 test("valid negative answers match nothing", () => {
-  assert.deepEqual(matchedLabelIds(labels, {
-    answers: { label_1: { noul: 0 }, label_2: { noul: 0.49 } },
-  }), []);
+  assert.deepEqual(
+    matchedLabelIds(labels, {
+      answers: { label_1: { noul: 0 }, label_2: { noul: 0.49 } },
+    }),
+    [],
+  );
 });
 
 test("labelNewThread persists matches from a completed model response", async () => {
   const inserted = [];
   const env = {
     DB: {
-      prepare(sql) {
+      async one(sql, values) {
+        assert.match(sql, /FROM messages msg/);
+        assert.deepEqual(values, [42, 7]);
         return {
-          bind(...values) {
-            return {
-              async first() {
-                assert.match(sql, /FROM messages msg/);
-                assert.deepEqual(values, [42, 7]);
-                return { subject: "Guest post", from_address: "sender@example.com",
-                  from_name: null, text_body: "Can I write a guest post?", mailbox_id: 2 };
-              },
-              async all() {
-                assert.match(sql, /FROM labels WHERE mailbox_id/);
-                assert.deepEqual(values, [2]);
-                return { results: labels };
-              },
-              async run() {
-                assert.match(sql, /INSERT OR IGNORE INTO thread_labels/);
-                inserted.push(values);
-              },
-            };
-          },
+          subject: "Guest post",
+          from_address: "sender@example.com",
+          from_name: null,
+          text_body: "Can I write a guest post?",
+          mailbox_id: 2,
         };
+      },
+      async query(sql, values) {
+        if (sql.includes("FROM labels")) {
+          assert.deepEqual(values, [2]);
+          return { rows: labels };
+        }
+        assert.match(sql, /INSERT INTO thread_labels/);
+        inserted.push(values);
       },
     },
     AI: {
@@ -105,10 +118,15 @@ test("labelNewThread persists matches from a completed model response", async ()
         assert.equal(model, "typesafe/jev");
         assert.equal(input.state.body, "Can I write a guest post?");
         assert.deepEqual(Object.keys(input.questions), ["label_1", "label_2"]);
-        return { state: "Completed", result: { answers: {
-          label_1: { type: "noul", noul: 0.96 },
-          label_2: { type: "noul", noul: 0.1 },
-        } } };
+        return {
+          state: "Completed",
+          result: {
+            answers: {
+              label_1: { type: "noul", noul: 0.96 },
+              label_2: { type: "noul", noul: 0.1 },
+            },
+          },
+        };
       },
     },
   };
@@ -116,9 +134,14 @@ test("labelNewThread persists matches from a completed model response", async ()
   assert.deepEqual(inserted, [[7, 1]]);
 
   inserted.length = 0;
-  env.AI.run = async () => ({ state: "Completed", result: { answers: {
-    label_1: { noul: 0.96 },
-  } } });
+  env.AI.run = async () => ({
+    state: "Completed",
+    result: {
+      answers: {
+        label_1: { noul: 0.96 },
+      },
+    },
+  });
   await assert.rejects(labelNewThread(env, 7, 42), /Invalid JEV response/);
   assert.deepEqual(inserted, []);
 });

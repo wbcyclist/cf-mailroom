@@ -1,5 +1,6 @@
+import { type Database } from "../database.ts";
 export interface SendBudgetEnv {
-  DB: D1Database;
+  DB: Database;
 }
 
 export async function claimDailySendBudget(
@@ -9,16 +10,15 @@ export async function claimDailySendBudget(
 ): Promise<boolean> {
   if (!Number.isInteger(limit) || limit <= 0) return false;
   const day = new Date().toISOString().slice(0, 10);
-  const claimed = await env.DB.prepare(
+  const claimed = await env.DB.one<{ send_count: number }>(
     `INSERT INTO mcp_send_budget (actor_id, budget_date, send_count)
-     VALUES (?, ?, 1)
+     VALUES ($1, $2, 1)
      ON CONFLICT(actor_id, budget_date) DO UPDATE SET
-       send_count = send_count + 1,
-       updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE send_count < ?
+       send_count = mcp_send_budget.send_count + 1,
+       updated_at = now()
+     WHERE mcp_send_budget.send_count < $3
      RETURNING send_count`,
-  )
-    .bind(actorId, day, limit)
-    .first<{ send_count: number }>();
+    [actorId, day, limit],
+  );
   return Boolean(claimed);
 }

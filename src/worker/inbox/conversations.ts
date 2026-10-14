@@ -1,7 +1,12 @@
-import { decodeCursor, encodeCursor, entityId } from "../../shared/entity-ids.ts";
+import { type Database } from "../database.ts";
+import {
+  decodeCursor,
+  encodeCursor,
+  entityId,
+} from "../../shared/entity-ids.ts";
 
 export interface InboxDataEnv {
-  DB: D1Database;
+  DB: Database;
   WEB_APP_URL?: string;
 }
 
@@ -31,20 +36,18 @@ interface ConversationRow {
 }
 
 export async function listInboxes(env: InboxDataEnv) {
-  const { results } = await env.DB.prepare(
-    `SELECT m.id, m.address, m.agent_mode,
-       CASE WHEN d.status = 'active' THEN 1 ELSE 0 END AS can_send,
-       (SELECT COUNT(*) FROM threads t
-        WHERE t.mailbox_id = m.id AND t.is_read = 0 AND t.status != 'archived') AS unread_count
-     FROM mailboxes m LEFT JOIN domains d ON d.id = m.domain_id
-     ORDER BY m.address`,
-  ).all<{
+  const { rows: results } = await env.DB.query<{
     id: number;
     address: string;
     agent_mode: "off" | "draft" | "auto";
     can_send: number;
     unread_count: number;
-  }>();
+  }>(`SELECT m.id, m.address, m.agent_mode,
+       CASE WHEN d.status = 'active' THEN 1 ELSE 0 END AS can_send,
+       (SELECT COUNT(*) FROM threads t
+        WHERE t.mailbox_id = m.id AND t.is_read = 0 AND t.status != 'archived') AS unread_count
+     FROM mailboxes m LEFT JOIN domains d ON d.id = m.domain_id
+     ORDER BY m.address`);
 
   return {
     inboxes: results.map((inbox) => ({
@@ -57,49 +60,57 @@ export async function listInboxes(env: InboxDataEnv) {
   };
 }
 
-export async function searchConversations(env: InboxDataEnv, input: SearchConversationInput) {
-  const conditions = ["t.status = ?"];
+export async function searchConversations(
+  env: InboxDataEnv,
+  input: SearchConversationInput,
+) {
+  const conditions = ["t.status = $1"];
   const values: unknown[] = [input.status ?? "open"];
 
   if (input.inboxId !== undefined) {
-    conditions.push("t.mailbox_id = ?");
+    conditions.push(`t.mailbox_id = $${values.length + 1}`);
     values.push(input.inboxId);
   }
   if (input.unread !== undefined) {
-    conditions.push("t.is_read = ?");
+    conditions.push(`t.is_read = $${values.length + 1}`);
     values.push(input.unread ? 0 : 1);
   }
   const query = input.query?.trim().toLowerCase();
   if (query) {
     const escaped = escapeLike(query);
     if (new TextEncoder().encode(escaped).byteLength > 46) {
-      throw new ConversationInputError("Search query is too long; use fewer or shorter terms");
+      throw new ConversationInputError(
+        "Search query is too long; use fewer or shorter terms",
+      );
     }
     const pattern = `%${escaped}%`;
     conditions.push(
-      `(lower(t.subject) LIKE ? ESCAPE '\\' OR lower(t.snippet) LIKE ? ESCAPE '\\' OR EXISTS (
+      `(lower(t.subject) LIKE $${values.length + 1} ESCAPE '\\' OR lower(t.snippet) LIKE $${values.length + 1} ESCAPE '\\' OR EXISTS (
          SELECT 1 FROM messages qm
          WHERE qm.thread_id = t.id
-           AND (lower(substr(COALESCE(qm.text_body, ''), 1, 20000)) LIKE ? ESCAPE '\\'
-             OR lower(qm.from_address) LIKE ? ESCAPE '\\')
+           AND (lower(substr(COALESCE(qm.text_body, ''), 1, 20000)) LIKE $${values.length + 1} ESCAPE '\\'
+             OR lower(qm.from_address) LIKE $${values.length + 1} ESCAPE '\\')
        ))`,
     );
-    values.push(pattern, pattern, pattern, pattern);
+    values.push(pattern);
   }
   const cursor = decodeCursor(input.cursor);
-  if (input.cursor && !cursor) throw new ConversationInputError("Invalid cursor");
+  if (input.cursor && !cursor)
+    throw new ConversationInputError("Invalid cursor");
   if (cursor) {
-    conditions.push("(t.last_message_at < ? OR (t.last_message_at = ? AND t.id < ?))");
-    values.push(cursor.lastMessageAt, cursor.lastMessageAt, cursor.id);
+    conditions.push(
+      `(t.last_message_at < $${values.length + 1} OR (t.last_message_at = $${values.length + 1} AND t.id < $${values.length + 2}))`,
+    );
+    values.push(cursor.lastMessageAt, cursor.id);
   }
 
-  const { results } = await env.DB.prepare(
+  const { rows: results } = await env.DB.query<ConversationRow>(
     `SELECT t.id, t.mailbox_id, m.address AS mailbox_address,
        t.subject, t.snippet, t.status, t.is_read, t.message_count, t.last_message_at,
        latest_message.direction AS last_direction,
        CASE
          WHEN latest_message.direction = 'outbound'
-           THEN 'To: ' || COALESCE(json_extract(latest_message.to_addresses, '$[0]'), '')
+           THEN 'To: ' || COALESCE((latest_message.to_addresses::jsonb ->> 0), '')
          ELSE COALESCE(latest_message.from_name, latest_message.from_address)
        END AS correspondent,
        (SELECT COUNT(*) FROM drafts d
@@ -123,10 +134,9 @@ export async function searchConversations(env: InboxDataEnv, input: SearchConver
      )
      WHERE ${conditions.join(" AND ")}
      ORDER BY t.last_message_at DESC, t.id DESC
-     LIMIT ?`,
-  )
-    .bind(...values, input.limit + 1)
-    .all<ConversationRow>();
+     LIMIT $${values.length + 1}`,
+    [...values, input.limit + 1],
+  );
 
   const hasMore = results.length > input.limit;
   const page = results.slice(0, input.limit);
@@ -154,99 +164,100 @@ export async function searchConversations(env: InboxDataEnv, input: SearchConver
   };
 }
 
-export async function getConversation(env: InboxDataEnv, id: number, limit: number) {
-  const thread = await env.DB.prepare(
+export async function getConversation(
+  env: InboxDataEnv,
+  id: number,
+  limit: number,
+) {
+  const thread = await env.DB.one<{
+    id: number;
+    mailbox_id: number;
+    mailbox_address: string;
+    subject: string;
+    status: "open" | "archived" | "needs_human";
+    is_read: number;
+    message_count: number;
+    last_message_at: string;
+  }>(
     `SELECT t.id, t.mailbox_id, m.address AS mailbox_address, t.subject,
        t.status, t.is_read, t.message_count, t.last_message_at
      FROM threads t JOIN mailboxes m ON m.id = t.mailbox_id
-     WHERE t.id = ?`,
-  )
-    .bind(id)
-    .first<{
-      id: number;
-      mailbox_id: number;
-      mailbox_address: string;
-      subject: string;
-      status: "open" | "archived" | "needs_human";
-      is_read: number;
-      message_count: number;
-      last_message_at: string;
-    }>();
+     WHERE t.id = $1`,
+    [id],
+  );
   if (!thread) return null;
 
   const [messageResult, draftResult, draftRun] = await Promise.all([
-    env.DB.prepare(
+    env.DB.query<{
+      id: number;
+      direction: "inbound" | "outbound";
+      sent_by: "external" | "human" | "agent";
+      from_address: string;
+      from_name: string | null;
+      to_addresses: string;
+      subject: string;
+      reply_to_addresses: string;
+      text_body: string | null;
+      text_truncated: boolean;
+      created_at: string;
+    }>(
       `SELECT * FROM (
          SELECT id, direction, sent_by, from_address, from_name, to_addresses,
            subject, reply_to_addresses,
            substr(COALESCE(text_body, ''), 1, 20000) AS text_body,
            length(COALESCE(text_body, '')) > 20000 AS text_truncated, created_at
-         FROM messages WHERE thread_id = ?
-         ORDER BY created_at DESC, id DESC LIMIT ?
-       ) ORDER BY created_at, id`,
-    )
-      .bind(id, limit)
-      .all<{
-        id: number;
-        direction: "inbound" | "outbound";
-        sent_by: "external" | "human" | "agent";
-        from_address: string;
-        from_name: string | null;
-        to_addresses: string;
-        subject: string;
-        reply_to_addresses: string;
-        text_body: string | null;
-        text_truncated: number;
-        created_at: string;
-      }>(),
-    env.DB.prepare(
+         FROM messages WHERE thread_id = $1
+         ORDER BY created_at DESC, id DESC LIMIT $2
+       ) recent ORDER BY created_at, id`,
+      [id, limit],
+    ),
+    env.DB.query<{
+      id: number;
+      text_body: string;
+      text_truncated: boolean;
+      created_by: "human" | "agent";
+      agent_notes: string | null;
+      status: "pending";
+      created_at: string;
+    }>(
       `SELECT id, substr(text_body, 1, 20000) AS text_body,
          length(text_body) > 20000 AS text_truncated,
          created_by, agent_notes, status, created_at
-       FROM drafts WHERE thread_id = ? AND status = 'pending'
+       FROM drafts WHERE thread_id = $1 AND status = 'pending'
        ORDER BY created_at, id`,
-    )
-      .bind(id)
-      .all<{
-        id: number;
-        text_body: string;
-        text_truncated: number;
-        created_by: "human" | "agent";
-        agent_notes: string | null;
-        status: "pending";
-        created_at: string;
-      }>(),
-    env.DB.prepare(
+      [id],
+    ),
+    env.DB.one<{
+      status: string;
+      error: string | null;
+      started_at: string | null;
+      finished_at: string | null;
+    }>(
       `SELECT status, error, started_at, finished_at
-       FROM draft_runs WHERE thread_id = ?
+       FROM draft_runs WHERE thread_id = $1
        ORDER BY created_at DESC, id DESC LIMIT 1`,
-    )
-      .bind(id)
-      .first<{
-        status: string;
-        error: string | null;
-        started_at: string | null;
-        finished_at: string | null;
-      }>(),
+      [id],
+    ),
   ]);
 
-  const messageIds = messageResult.results.map((message) => message.id);
-  const attachmentsByMessage = new Map<number, Array<Record<string, unknown>>>();
+  const messageIds = messageResult.rows.map((message) => message.id);
+  const attachmentsByMessage = new Map<
+    number,
+    Array<Record<string, unknown>>
+  >();
   if (messageIds.length > 0) {
-    const placeholders = messageIds.map(() => "?").join(", ");
-    const { results } = await env.DB.prepare(
+    const { rows: results } = await env.DB.query<{
+      id: number;
+      message_id: number;
+      filename: string | null;
+      content_type: string;
+      size: number;
+      disposition: string | null;
+    }>(
       `SELECT id, message_id, filename, content_type, size, disposition
-       FROM attachments WHERE message_id IN (${placeholders}) ORDER BY id`,
-    )
-      .bind(...messageIds)
-      .all<{
-        id: number;
-        message_id: number;
-        filename: string | null;
-        content_type: string;
-        size: number;
-        disposition: string | null;
-      }>();
+       FROM attachments WHERE message_id = ANY($1::bigint[]) ORDER BY id`,
+      [messageIds],
+    );
     for (const attachment of results) {
       const list = attachmentsByMessage.get(attachment.message_id) ?? [];
       list.push({
@@ -260,7 +271,10 @@ export async function getConversation(env: InboxDataEnv, id: number, limit: numb
     }
   }
 
-  const webOrigin = (env.WEB_APP_URL ?? "https://mailroom.example.com").replace(/\/$/, "");
+  const webOrigin = (env.WEB_APP_URL ?? "https://mailroom.example.com").replace(
+    /\/$/,
+    "",
+  );
   return {
     conversation: {
       id: entityId("conversation", thread.id),
@@ -273,7 +287,7 @@ export async function getConversation(env: InboxDataEnv, id: number, limit: numb
       last_message_at: thread.last_message_at,
       web_url: `${webOrigin}/inbox/${thread.id}`,
     },
-    messages: messageResult.results.map((message) => ({
+    messages: messageResult.rows.map((message) => ({
       id: entityId("message", message.id),
       direction: message.direction,
       sent_by: message.sent_by,
@@ -284,24 +298,27 @@ export async function getConversation(env: InboxDataEnv, id: number, limit: numb
       to: parseAddressList(message.to_addresses),
       reply_target:
         message.direction === "inbound"
-          ? resolvedReplyTarget(message.reply_to_addresses, message.from_address)
+          ? resolvedReplyTarget(
+              message.reply_to_addresses,
+              message.from_address,
+            )
           : [],
       subject: message.subject,
       text: message.text_body ?? "",
-      text_truncated: message.text_truncated === 1,
+      text_truncated: message.text_truncated,
       attachments: attachmentsByMessage.get(message.id) ?? [],
       created_at: message.created_at,
     })),
-    pending_drafts: draftResult.results.map((draft) => ({
+    pending_drafts: draftResult.rows.map((draft) => ({
       id: entityId("draft", draft.id),
       text: draft.text_body,
-      text_truncated: draft.text_truncated === 1,
+      text_truncated: draft.text_truncated,
       created_by: draft.created_by,
       agent_notes: draft.agent_notes,
       created_at: draft.created_at,
     })),
     ai_drafting: draftRun ?? null,
-    messages_truncated: thread.message_count > messageResult.results.length,
+    messages_truncated: thread.message_count > messageResult.rows.length,
   };
 }
 

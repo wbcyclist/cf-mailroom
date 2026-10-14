@@ -1,3 +1,4 @@
+import { type Database } from "../worker/database.ts";
 import type { AuthRequest } from "@cloudflare/workers-oauth-provider";
 
 export interface AuthorizationSubmissionOptions {
@@ -50,7 +51,10 @@ export async function parseAuthorizationSubmission(
   request: Request,
   options: AuthorizationSubmissionOptions,
 ): Promise<AuthorizationSubmission> {
-  const contentType = request.headers.get("Content-Type")?.split(";", 1)[0]?.trim();
+  const contentType = request.headers
+    .get("Content-Type")
+    ?.split(";", 1)[0]
+    ?.trim();
   if (contentType !== "application/x-www-form-urlencoded") {
     throw new AuthorizationSubmissionError("invalid_content_type", 400);
   }
@@ -80,7 +84,7 @@ export async function parseAuthorizationSubmission(
  * redirect, state, scopes, PKCE, resource indicator, and issuer.
  */
 export async function createAuthorizationTransaction(
-  db: D1Database,
+  db: Database,
   ownerSub: string,
   request: AuthRequest,
   clock: AuthorizationTransactionClock = {},
@@ -93,16 +97,16 @@ export async function createAuthorizationTransaction(
 
   // Opportunistic bounded cleanup keeps abandoned and consumed rows from
   // accumulating without putting cleanup on the security-critical UPDATE.
-  await db
-    .prepare("DELETE FROM oauth_authorization_transactions WHERE expires_at <= ?")
-    .bind(now)
-    .run();
-  await db
-    .prepare(`INSERT INTO oauth_authorization_transactions
+  await db.query(
+    "DELETE FROM oauth_authorization_transactions WHERE expires_at <= $1",
+    [now],
+  );
+  await db.query(
+    `INSERT INTO oauth_authorization_transactions
       (token_hash, owner_sub, auth_request_json, created_at, expires_at)
-      VALUES (?, ?, ?, ?, ?)`)
-    .bind(tokenHash, ownerSub, requestJson, now, now + ttl)
-    .run();
+      VALUES ($1, $2, $3, $4, $5)`,
+    [tokenHash, ownerSub, requestJson, now, now + ttl],
+  );
 
   return token;
 }
@@ -113,7 +117,7 @@ export async function createAuthorizationTransaction(
  * request that produced the consent screen.
  */
 export async function consumeAuthorizationTransaction(
-  db: D1Database,
+  db: Database,
   transactionToken: string,
   ownerSub: string,
   request: AuthRequest,
@@ -122,18 +126,18 @@ export async function consumeAuthorizationTransaction(
   const now = clock.nowSeconds ?? currentUnixTime();
   const tokenHash = await sha256Hex(transactionToken);
   const requestJson = serializeAuthorizationRequest(request);
-  const result = await db
-    .prepare(`UPDATE oauth_authorization_transactions
-      SET consumed_at = ?
-      WHERE token_hash = ?
-        AND owner_sub = ?
-        AND auth_request_json = ?
+  const result = await db.query(
+    `UPDATE oauth_authorization_transactions
+      SET consumed_at = $1
+      WHERE token_hash = $2
+        AND owner_sub = $3
+        AND auth_request_json = $4
         AND consumed_at IS NULL
-        AND expires_at > ?`)
-    .bind(now, tokenHash, ownerSub, requestJson, now)
-    .run();
+        AND expires_at > $5`,
+    [now, tokenHash, ownerSub, requestJson, now],
+  );
 
-  return result.meta.changes === 1;
+  return result.rowCount === 1;
 }
 
 export function serializeAuthorizationRequest(request: AuthRequest): string {
@@ -147,22 +151,27 @@ export function serializeAuthorizationRequest(request: AuthRequest): string {
     codeChallengeMethod: request.codeChallengeMethod ?? null,
     resource: Array.isArray(request.resource)
       ? [...request.resource]
-      : request.resource ?? null,
+      : (request.resource ?? null),
     issuer: request.issuer ?? null,
   });
 }
 
-function hasTrustedSubmissionSource(request: Request, expectedOrigin: string): boolean {
+function hasTrustedSubmissionSource(
+  request: Request,
+  expectedOrigin: string,
+): boolean {
   if (new URL(request.url).origin !== expectedOrigin) return false;
 
   const origin = parseSourceOrigin(request.headers.get("Origin"));
   if (origin === "invalid" || origin !== expectedOrigin) return false;
 
   const referer = parseSourceOrigin(request.headers.get("Referer"));
-  if (referer === "invalid" || (referer && referer !== expectedOrigin)) return false;
+  if (referer === "invalid" || (referer && referer !== expectedOrigin))
+    return false;
 
   const fetchSite = request.headers.get("Sec-Fetch-Site")?.trim().toLowerCase();
-  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") return false;
+  if (fetchSite && fetchSite !== "same-origin" && fetchSite !== "none")
+    return false;
 
   return true;
 }
@@ -182,10 +191,17 @@ function currentUnixTime(): number {
 
 function randomToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
 }
 
 async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
 }

@@ -1,3 +1,4 @@
+import { databaseFixture } from "./helpers/postgres.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -54,7 +55,7 @@ async function rejectsWith(request, code) {
   });
 }
 
-test("accepts an exact same-origin form POST without a cookie", async () => {
+test("accepts an exact same-origin form POST without a cookie", async (t) => {
   const parsed = await parse(
     submission({ Origin: ORIGIN, "Sec-Fetch-Site": "same-origin" }),
   );
@@ -62,14 +63,17 @@ test("accepts an exact same-origin form POST without a cookie", async () => {
   assert.equal(parsed.transactionToken, TRANSACTION);
 });
 
-test("accepts a normalized same-origin Origin", async () => {
+test("accepts a normalized same-origin Origin", async (t) => {
   await parse(submission({ Origin: `${ORIGIN}/` }));
 });
 
-test("rejects explicit cross-origin browser signals", async () => {
+test("rejects explicit cross-origin browser signals", async (t) => {
   await rejectsWith(submission(), "invalid_source");
   await rejectsWith(submission({ Origin: "null" }), "invalid_source");
-  await rejectsWith(submission({ Origin: "https://attacker.example" }), "invalid_source");
+  await rejectsWith(
+    submission({ Origin: "https://attacker.example" }),
+    "invalid_source",
+  );
   await rejectsWith(
     submission({ Origin: ORIGIN, Referer: "https://attacker.example/form" }),
     "invalid_source",
@@ -79,12 +83,15 @@ test("rejects explicit cross-origin browser signals", async () => {
     "invalid_source",
   );
   await rejectsWith(
-    submission({ Origin: ORIGIN }, { url: "https://attacker.example/authorize" }),
+    submission(
+      { Origin: ORIGIN },
+      { url: "https://attacker.example/authorize" },
+    ),
     "invalid_source",
   );
 });
 
-test("rejects missing and malformed transaction tokens", async () => {
+test("rejects missing and malformed transaction tokens", async (t) => {
   await rejectsWith(
     submission({ Origin: ORIGIN }, { transaction: "wrong" }),
     "invalid_transaction",
@@ -101,7 +108,7 @@ test("rejects missing and malformed transaction tokens", async () => {
   await rejectsWith(missing, "invalid_transaction");
 });
 
-test("rejects unsupported content types and oversized forms", async () => {
+test("rejects unsupported content types and oversized forms", async (t) => {
   const wrongType = submission();
   wrongType.headers.set("Content-Type", "application/json");
   await rejectsWith(wrongType, "invalid_content_type");
@@ -112,7 +119,9 @@ test("rejects unsupported content types and oversized forms", async () => {
       expectedOrigin: ORIGIN,
       maxBodyBytes: 8,
     }),
-    (error) => error instanceof AuthorizationSubmissionError && error.code === "body_too_large",
+    (error) =>
+      error instanceof AuthorizationSubmissionError &&
+      error.code === "body_too_large",
   );
 });
 
@@ -130,41 +139,74 @@ test("request snapshots bind all values used to complete authorization", () => {
   });
 });
 
-test("a matching authorization transaction can be consumed exactly once", async () => {
-  const db = new MemoryTransactionDatabase();
-  const token = await createAuthorizationTransaction(db, "access-sub", AUTH_REQUEST, {
-    nowSeconds: 1_000,
-  });
+test("a matching authorization transaction can be consumed exactly once", async (t) => {
+  const db = await databaseFixture(t);
+  const token = await createAuthorizationTransaction(
+    db,
+    "access-sub",
+    AUTH_REQUEST,
+    {
+      nowSeconds: 1_000,
+    },
+  );
 
   assert.equal(
-    await consumeAuthorizationTransaction(db, token, "access-sub", AUTH_REQUEST, {
-      nowSeconds: 1_001,
-    }),
+    await consumeAuthorizationTransaction(
+      db,
+      token,
+      "access-sub",
+      AUTH_REQUEST,
+      {
+        nowSeconds: 1_001,
+      },
+    ),
     true,
   );
   assert.equal(
-    await consumeAuthorizationTransaction(db, token, "access-sub", AUTH_REQUEST, {
-      nowSeconds: 1_002,
-    }),
+    await consumeAuthorizationTransaction(
+      db,
+      token,
+      "access-sub",
+      AUTH_REQUEST,
+      {
+        nowSeconds: 1_002,
+      },
+    ),
     false,
   );
 });
 
-test("authorization transactions reject a different owner or OAuth request", async () => {
-  const db = new MemoryTransactionDatabase();
-  const ownerToken = await createAuthorizationTransaction(db, "access-sub", AUTH_REQUEST, {
-    nowSeconds: 2_000,
-  });
+test("authorization transactions reject a different owner or OAuth request", async (t) => {
+  const db = await databaseFixture(t);
+  const ownerToken = await createAuthorizationTransaction(
+    db,
+    "access-sub",
+    AUTH_REQUEST,
+    {
+      nowSeconds: 2_000,
+    },
+  );
   assert.equal(
-    await consumeAuthorizationTransaction(db, ownerToken, "other-sub", AUTH_REQUEST, {
-      nowSeconds: 2_001,
-    }),
+    await consumeAuthorizationTransaction(
+      db,
+      ownerToken,
+      "other-sub",
+      AUTH_REQUEST,
+      {
+        nowSeconds: 2_001,
+      },
+    ),
     false,
   );
 
-  const requestToken = await createAuthorizationTransaction(db, "access-sub", AUTH_REQUEST, {
-    nowSeconds: 2_000,
-  });
+  const requestToken = await createAuthorizationTransaction(
+    db,
+    "access-sub",
+    AUTH_REQUEST,
+    {
+      nowSeconds: 2_000,
+    },
+  );
   assert.equal(
     await consumeAuthorizationTransaction(
       db,
@@ -177,72 +219,26 @@ test("authorization transactions reject a different owner or OAuth request", asy
   );
 });
 
-test("authorization transactions expire after ten minutes", async () => {
-  const db = new MemoryTransactionDatabase();
-  const token = await createAuthorizationTransaction(db, "access-sub", AUTH_REQUEST, {
-    nowSeconds: 3_000,
-  });
+test("authorization transactions expire after ten minutes", async (t) => {
+  const db = await databaseFixture(t);
+  const token = await createAuthorizationTransaction(
+    db,
+    "access-sub",
+    AUTH_REQUEST,
+    {
+      nowSeconds: 3_000,
+    },
+  );
   assert.equal(
-    await consumeAuthorizationTransaction(db, token, "access-sub", AUTH_REQUEST, {
-      nowSeconds: 3_600,
-    }),
+    await consumeAuthorizationTransaction(
+      db,
+      token,
+      "access-sub",
+      AUTH_REQUEST,
+      {
+        nowSeconds: 3_600,
+      },
+    ),
     false,
   );
 });
-
-class MemoryTransactionDatabase {
-  rows = new Map();
-
-  prepare(sql) {
-    const statement = sql.replace(/\s+/g, " ").trim();
-    return {
-      bind: (...values) => ({
-        run: async () => this.#run(statement, values),
-      }),
-    };
-  }
-
-  #run(statement, values) {
-    if (statement.startsWith("DELETE FROM oauth_authorization_transactions")) {
-      const [now] = values;
-      let changes = 0;
-      for (const [key, row] of this.rows) {
-        if (row.expiresAt <= now) {
-          this.rows.delete(key);
-          changes++;
-        }
-      }
-      return { meta: { changes } };
-    }
-
-    if (statement.startsWith("INSERT INTO oauth_authorization_transactions")) {
-      const [tokenHash, ownerSub, requestJson, createdAt, expiresAt] = values;
-      this.rows.set(tokenHash, {
-        ownerSub,
-        requestJson,
-        createdAt,
-        expiresAt,
-        consumedAt: null,
-      });
-      return { meta: { changes: 1 } };
-    }
-
-    if (statement.startsWith("UPDATE oauth_authorization_transactions")) {
-      const [consumedAt, tokenHash, ownerSub, requestJson, now] = values;
-      const row = this.rows.get(tokenHash);
-      if (
-        !row ||
-        row.ownerSub !== ownerSub ||
-        row.requestJson !== requestJson ||
-        row.consumedAt !== null ||
-        row.expiresAt <= now
-      ) {
-        return { meta: { changes: 0 } };
-      }
-      row.consumedAt = consumedAt;
-      return { meta: { changes: 1 } };
-    }
-
-    throw new Error(`Unexpected SQL in test: ${statement}`);
-  }
-}

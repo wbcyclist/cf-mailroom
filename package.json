@@ -8,24 +8,19 @@
     "build": "vite build",
     "check": "tsc -b",
     "test": "node --test --experimental-strip-types tests/*.test.mjs",
-    "deploy": "npm run build && npm run db:migrate && node scripts/deploy.mjs",
-    "db:migrate:local": "wrangler d1 migrations apply DB --local --config wrangler.dev.jsonc",
-    "db:migrate": "wrangler d1 migrations apply DB --remote --config wrangler.jsonc",
-    "db:seed:local": "wrangler d1 execute DB --local --config wrangler.dev.jsonc --file=./scripts/seed.sql",
+    "deploy": "node scripts/check-database-config.mjs && npm run build && npm run db:migrate && node scripts/deploy.mjs",
+    "db:migrate:local": "node scripts/database.mjs migrate --local",
+    "db:migrate": "node --env-file-if-exists=.env scripts/database.mjs migrate",
+    "db:seed:local": "node scripts/database.mjs seed --local",
     "email:test": "curl -X POST 'http://localhost:5173/cdn-cgi/handler/email?from=customer@example.com&to=support@yourdomain.com' -H 'Content-Type: message/rfc822' --data-binary @./scripts/test-email.eml",
     "email:test:attachment": "curl -X POST 'http://localhost:5173/cdn-cgi/handler/email?from=forms@example.com&to=support@yourdomain.com' -H 'Content-Type: message/rfc822' --data-binary @./scripts/test-email-attachment.eml",
     "email:test:reopen": "curl -X POST 'http://localhost:5173/cdn-cgi/handler/email?from=forms@example.com&to=support@yourdomain.com' -H 'Content-Type: message/rfc822' --data-binary @./scripts/test-email-reopen.eml",
     "vapid:generate": "pushforge vapid",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "db:start": "docker compose up -d --wait postgres"
   },
   "cloudflare": {
     "bindings": {
-      "DB": {
-        "description": "Stores inboxes, conversations, messages and settings. Choose a new database for this instance; migrations run automatically during deployment."
-      },
-      "RAW": {
-        "description": "Private storage for original emails and attachments. Requires R2 to be enabled on your Cloudflare account."
-      },
       "AI": {
         "description": "Workers AI generates drafts and classifies inbound email. Usage is billed to your Cloudflare account."
       },
@@ -40,6 +35,9 @@
       },
       "OAUTH_KV": {
         "description": "Stores OAuth clients and tokens for the built-in MCP server at `/mcp`. Use a namespace dedicated to this instance."
+      },
+      "HYPERDRIVE": {
+        "description": "Connects to your PostgreSQL database for mail, settings, raw MIME, and attachments. Create it with query caching disabled before deployment."
       }
     }
   },
@@ -56,6 +54,7 @@
     "hono": "^4.6.0",
     "jose": "^6.2.10",
     "lucide-react": "^1.33.0",
+    "pg": "^8.23.1",
     "postal-mime": "^2.3.0",
     "radix-ui": "^1.6.7",
     "react": "^19.0.0",
@@ -71,6 +70,7 @@
     "@cloudflare/vite-plugin": "^1.0.0",
     "@cloudflare/workers-types": "^5.20260815.1",
     "@tailwindcss/vite": "^4.0.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",

@@ -1,5 +1,5 @@
 import { buildPushHTTPRequest } from "@pushforge/builder";
-import type { BrowserPushSubscription } from "../../shared/types";
+import type { BrowserPushSubscription } from "../../shared/types.ts";
 
 interface StoredPushSubscription {
   endpoint: string;
@@ -76,15 +76,11 @@ export async function notifyNewEmail(
   const privateJWK = env.VAPID_PRIVATE_JWK;
   const adminContact = env.VAPID_SUBJECT;
 
-  const settings = await env.DB.prepare(
-    "SELECT browser_notifications_enabled FROM global_settings WHERE id = 1",
-  ).first<{ browser_notifications_enabled: number }>();
+  const settings = await env.DB.one<{ browser_notifications_enabled: number }>("SELECT browser_notifications_enabled FROM global_settings WHERE id = 1");
   if (!settings?.browser_notifications_enabled) return;
 
-  const { results } = await env.DB.prepare(
-    `SELECT endpoint, expiration_time, p256dh, auth
-     FROM push_subscriptions ORDER BY id`,
-  ).all<StoredPushSubscription>();
+  const { rows: results } = await env.DB.query<StoredPushSubscription>(`SELECT endpoint, expiration_time, p256dh, auth
+     FROM push_subscriptions ORDER BY id`);
   if (results.length === 0) return;
 
   const payload = buildNewEmailNotification(input);
@@ -142,7 +138,7 @@ export async function notifyNewEmail(
   if (deadEndpoints.length > 0) {
     await Promise.all(
       deadEndpoints.map((endpoint) =>
-        env.DB.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").bind(endpoint).run(),
+        env.DB.query("DELETE FROM push_subscriptions WHERE endpoint = $1", [endpoint]),
       ),
     );
   }

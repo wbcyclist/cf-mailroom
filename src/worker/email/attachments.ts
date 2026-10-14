@@ -1,6 +1,14 @@
+import { putFile } from "../files.ts";
+import { type Database, type SqlStatement, statement } from "../database.ts";
 import { attachmentBytes } from "./rules.ts";
-import { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_TOTAL_BYTES } from "../../shared/email-limits.ts";
-export { MAX_ATTACHMENTS_PER_MESSAGE, MAX_ATTACHMENT_TOTAL_BYTES } from "../../shared/email-limits.ts";
+import {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+} from "../../shared/email-limits.ts";
+export {
+  MAX_ATTACHMENTS_PER_MESSAGE,
+  MAX_ATTACHMENT_TOTAL_BYTES,
+} from "../../shared/email-limits.ts";
 
 // The provider caps the whole MIME message at 5 MiB; base64 inflates payload
 // by ~4/3, so 3 MiB of raw attachment bytes stays safely under the limit.
@@ -24,14 +32,14 @@ export interface NormalizedAttachment {
   content: Uint8Array;
 }
 
-/** Attachment metadata persisted on the attempt row, including the R2 key. */
+/** Attachment metadata persisted on the attempt row, including the file key. */
 export interface StagedAttachment {
   filename: string | null;
   content_type: string;
   size: number;
   disposition: "attachment" | "inline";
   content_id: string | null;
-  r2_key: string;
+  file_key: string;
 }
 
 interface AttachmentMeta {
@@ -63,13 +71,16 @@ export function normalizeAttachments(
     total += content.byteLength;
     const disposition = input.disposition ?? "attachment";
     if (disposition !== "attachment" && disposition !== "inline") {
-      throw new AttachmentInputError("Attachment disposition must be attachment or inline");
+      throw new AttachmentInputError(
+        "Attachment disposition must be attachment or inline",
+      );
     }
     return {
       filename: sanitizeFilename(input.filename),
       contentType: sanitizeContentType(input.contentType),
       disposition,
-      contentId: disposition === "inline" ? sanitizeContentId(input.contentId) : null,
+      contentId:
+        disposition === "inline" ? sanitizeContentId(input.contentId) : null,
       content,
     };
   });
@@ -91,7 +102,9 @@ export function attachmentFingerprint(
   return JSON.stringify(attachments.map(metaOf));
 }
 
-export function parseStagedAttachments(raw: string | null | undefined): StagedAttachment[] {
+export function parseStagedAttachments(
+  raw: string | null | undefined,
+): StagedAttachment[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as unknown;
@@ -102,24 +115,28 @@ export function parseStagedAttachments(raw: string | null | undefined): StagedAt
 }
 
 export async function stageAttachments(
-  bucket: R2Bucket,
+  db: Database,
   mailboxId: number,
   attemptId: string,
   attachments: ReadonlyArray<NormalizedAttachment>,
 ): Promise<StagedAttachment[]> {
   const staged: StagedAttachment[] = [];
   for (const [index, attachment] of attachments.entries()) {
-    const r2Key = `attachments/${mailboxId}/outbound/${attemptId}/${index}-${crypto.randomUUID()}`;
-    await bucket.put(r2Key, attachment.content, {
-      httpMetadata: { contentType: attachment.contentType },
-    });
+    const fileKey = `attachments/${mailboxId}/outbound/${attemptId}/${index}-${crypto.randomUUID()}`;
+    await putFile(
+      db,
+      mailboxId,
+      fileKey,
+      attachment.content,
+      attachment.contentType,
+    );
     staged.push({
       filename: attachment.filename,
       content_type: attachment.contentType,
       size: attachment.content.byteLength,
       disposition: attachment.disposition,
       content_id: attachment.contentId,
-      r2_key: r2Key,
+      file_key: fileKey,
     });
   }
   return staged;
@@ -127,28 +144,30 @@ export async function stageAttachments(
 
 /** One INSERT..SELECT per staged file, linking it to the just-stored message. */
 export function recordAttachmentStatements(
-  db: D1Database,
   staged: ReadonlyArray<StagedAttachment>,
   rfcMessageId: string,
-): D1PreparedStatement[] {
+): SqlStatement[] {
   return staged.map((attachment) =>
-    db.prepare(
+    statement(
       `INSERT INTO attachments
-         (message_id, filename, content_type, size, disposition, content_id, r2_key)
-       SELECT id, ?, ?, ?, ?, ?, ? FROM messages WHERE message_id = ?`,
-    ).bind(
-      attachment.filename,
-      attachment.content_type,
-      attachment.size,
-      attachment.disposition,
-      attachment.content_id,
-      attachment.r2_key,
-      rfcMessageId,
+         (message_id, filename, content_type, size, disposition, content_id, file_key)
+       SELECT id, $1, $2, $3, $4, $5, $6 FROM messages WHERE message_id = $7`,
+      [
+        attachment.filename,
+        attachment.content_type,
+        attachment.size,
+        attachment.disposition,
+        attachment.content_id,
+        attachment.file_key,
+        rfcMessageId,
+      ],
     ),
   );
 }
 
-export function sendableAttachments(attachments: ReadonlyArray<NormalizedAttachment>) {
+export function sendableAttachments(
+  attachments: ReadonlyArray<NormalizedAttachment>,
+) {
   return attachments.map((attachment) => ({
     content: attachment.content,
     filename: attachment.filename ?? "attachment",
@@ -158,8 +177,10 @@ export function sendableAttachments(attachments: ReadonlyArray<NormalizedAttachm
   }));
 }
 
-function metaOf(attachment: NormalizedAttachment | StagedAttachment): AttachmentMeta {
-  if ("r2_key" in attachment) {
+function metaOf(
+  attachment: NormalizedAttachment | StagedAttachment,
+): AttachmentMeta {
+  if ("file_key" in attachment) {
     return {
       filename: attachment.filename,
       content_type: attachment.content_type,
@@ -195,7 +216,9 @@ function sanitizeContentType(contentType: string | null | undefined): string {
     : "application/octet-stream";
 }
 
-function sanitizeContentId(contentId: string | null | undefined): string | null {
+function sanitizeContentId(
+  contentId: string | null | undefined,
+): string | null {
   const cleaned = (contentId ?? "")
     .replace(/[\x00-\x1f<>\s]/g, "")
     .slice(0, MAX_CONTENT_ID_CHARS);

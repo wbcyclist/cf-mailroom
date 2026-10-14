@@ -12,3 +12,9 @@ dist/
 # Legacy config of the former separate MCP Worker. It holds owner-specific
 # values; keep it out of Git until the old Worker is deleted.
 wrangler.mcp.jsonc
+/work_tmp
+
+# PostgreSQL migration credentials
+.env
+.env.*
+!.env.example

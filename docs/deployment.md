@@ -1,77 +1,131 @@
 # Deploy your own Mailroom
 
-The recommended path is Cloudflare's guided deployment, followed by Access and
-email domain setup. No local CLI or API keys are needed for the initial web app.
+This version uses a fresh PostgreSQL database. The runtime path is
+**Cloudflare Worker → Hyperdrive → VPS PostgreSQL**. All former D1 business
+records, raw MIME, and attachments use PostgreSQL; no D1 or R2 binding is needed.
+OAuth clients, grants, and tokens still use `OAUTH_KV`, as required by the OAuth
+provider. Queues, Workers AI, Email Service, and Access remain on Cloudflare.
 
 ## Before you start
 
-- A GitHub account and a Cloudflare account.
-- A domain using Cloudflare DNS for receiving and sending email.
-- R2 enabled on the Cloudflare account (Cloudflare may ask for billing details).
-- Workers Paid (~$5/month) for sending email to arbitrary recipients through
-  [Email Sending](https://developers.cloudflare.com/email-service/).
-- A Cloudflare Zero Trust team for protecting the web app with Access (the free
-  plan is enough).
+- A GitHub account, a Cloudflare account, and a domain using Cloudflare DNS.
+- Workers Paid for outbound Email Sending and access to Hyperdrive.
+- PostgreSQL 17 or 18 with persistent storage, verified TLS, and backups.
+- Network access from Hyperdrive to PostgreSQL. Use the
+  [Hyperdrive networking guide](https://developers.cloudflare.com/hyperdrive/configuration/firewall-and-networking-configuration/)
+  or a supported private network connection. Keep PostgreSQL authenticated;
+  do not allow unauthenticated Internet access.
+- A Cloudflare Zero Trust team for protecting the web app with Access.
 
-Workers, D1, R2, Queues, and Workers AI usage belongs to your account and is
-subject to Cloudflare's quotas and billing. This is not a promise of free hosting.
+Cloudflare compute, AI, queues, OAuth KV, and email usage still belong to your
+account. Moving storage does not cap those services' usage. PostgreSQL disk,
+WAL, backups, and network traffic belong to your VPS setup.
 
-## At a glance
+## 1. Configure storage and the first build
 
-1. Deploy with the button — storage, queues, and migrations are automatic.
-2. Open the app and follow its setup screen: turn on Access for the Worker, then
-   paste the two values it shows. The API rejects requests until this is done.
-3. Connect your email domain (Email Routing in, Email Sending out).
-4. Add an Inbox in Settings and send yourself a test email.
-5. Optionally connect an agent over MCP (built in, at `/mcp`) and enable
-   browser notifications.
+### Create a fresh database
 
-## 1. Deploy the web app
+Connect to PostgreSQL as an administrator. Replace the sample passwords:
 
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/wong2/cf-mailroom)
+```sql
+CREATE ROLE mailroom_migrator LOGIN PASSWORD 'REPLACE_WITH_MIGRATION_PASSWORD';
+CREATE ROLE mailroom_app LOGIN PASSWORD 'REPLACE_WITH_RUNTIME_PASSWORD';
+CREATE DATABASE mailroom OWNER mailroom_migrator;
+ALTER ROLE mailroom_app SET statement_timeout = '30s';
+ALTER ROLE mailroom_app SET lock_timeout = '10s';
+ALTER ROLE mailroom_app SET idle_in_transaction_session_timeout = '30s';
+```
 
-1. Sign in to Cloudflare and connect GitHub when prompted. The source repository
-   must be public for other users to use this button.
-2. Choose the destination account, repository, and Worker name. For your first
-   instance, the default names are fine. For additional instances, use different
-   Worker, database, bucket, and queue names.
-3. Review the resource bindings: `DB` (D1), `RAW` (R2), `AI` (Workers AI),
-   `EMAIL` (Email Sending; onboard the sender domain after deploy — the binding
-   does not verify it), `DRAFT_QUEUE`, and `DRAFT_DLQ` (two distinct queues),
-   and `OAUTH_KV` (KV, for MCP OAuth clients and tokens).
-   Cloudflare provisions the resources in your account and writes their values
-   into your new repository.
-   In `wrangler.jsonc`, the consumer's `queue` must match `DRAFT_QUEUE` and its
-   `dead_letter_queue` must match `DRAFT_DLQ`, including if you rename them.
+Put the direct migration connection URL in a local ignored `.env` file, using
+[`.env.example`](../.env.example) as a template. URL-encode special characters in
+passwords. The migration role owns schema objects; the Worker uses the separate
+runtime role. Use a trusted certificate and `sslmode=verify-full`.
 
-   The repository Cloudflare creates belongs to you — your instance lives there.
-   Upstream changes do not arrive automatically; see [Updates](#updates).
-4. Set the **deploy command** to `npm run deploy`. You can leave the **build
-   command** empty because the deploy script builds the app itself. If Cloudflare
-   pre-fills `npm run build`, clearing it avoids building twice.
-5. Deploy and wait for Workers Builds to finish. The script builds the app,
-   applies pending D1 migrations, then deploys the generated Worker and assets.
-   It automatically creates missing browser notification credentials; no manual
-   VAPID key generation is needed.
+```sh
+npm ci
+npm run db:migrate
+```
 
-Cloudflare's [Deploy to Cloudflare documentation](https://developers.cloudflare.com/workers/platform/deploy-buttons/)
-describes resource provisioning and repository creation. One Worker serves the
-web app, inbound email, draft queue, and the MCP server.
+Migrations run only from `migrations/postgres/`. Files in the parent `migrations/`
+directory are the historical SQLite schema and are never applied to PostgreSQL.
+The migration runner uses a PostgreSQL advisory lock and a transaction. It records
+checksums, skips applied files, and stops if an applied file was edited.
 
-### Database binding without an account-specific ID
+Then connect to the `mailroom` database as its owner or an administrator:
 
-The shared configs intentionally omit `database_id`. The project pins Wrangler
-to 4.124.0, which resolves `database_name` in the authenticated Cloudflare account
-for deployments and remote migrations. An existing database with that name is
-reused. Use a distinct name for each independent instance in the same account.
-No environment-variable injection script is needed.
+```sql
+REVOKE CREATE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO mailroom_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO mailroom_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO mailroom_app;
+REVOKE ALL ON schema_migrations FROM mailroom_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE mailroom_migrator IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO mailroom_app;
+ALTER DEFAULT PRIVILEGES FOR ROLE mailroom_migrator IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO mailroom_app;
+```
 
-The deployment button provisions resources before the deploy command runs. For
-manual setup, create the database first as described below: this project's
-deploy command runs migrations before uploading the Worker, and migrations
-cannot create a missing database. If Cloudflare writes an explicit database ID
-into your instance's config, keep it consistent with the database name; Wrangler
-uses that ID when present.
+### Create Hyperdrive with query caching disabled
+
+Set `HYPERDRIVE_DATABASE_URL` in your shell to the connection URL for
+`mailroom_app`, then create the binding:
+
+```sh
+npx wrangler login
+npx wrangler hyperdrive create mailroom-postgres \
+  --connection-string "$HYPERDRIVE_DATABASE_URL" \
+  --sslmode verify-full \
+  --caching-disabled \
+  --origin-connection-limit 10
+```
+
+Copy the returned ID into `wrangler.jsonc` → `hyperdrive[0].id`, replacing the
+all-zero placeholder. The origin connection limit is a soft limit; size it for
+your VPS and reserve connections for migrations and administration. Set an
+appropriate PostgreSQL connection limit as well.
+
+**Keep query caching disabled.** Inbox reads, send attempts, and authorization
+transactions need fresh data. Hyperdrive writes do not invalidate cached query
+results. See [query caching](https://developers.cloudflare.com/hyperdrive/concepts/query-caching/).
+
+The Worker creates a request-scoped `pg` pool with at most three clients and
+closes it after its background work. Hyperdrive owns the shared origin pool.
+Binary file contents are selected only for downloads, not conversation lists.
+Inbound raw messages are limited to 25 MiB. Outbound attachments keep the existing
+3 MiB total limit. Full-text search indexes the subject and first 20,000 body
+characters with PostgreSQL's `simple` dictionary; search syntax uses
+`websearch_to_tsquery` rather than SQLite FTS5 operators.
+
+### Connect GitHub to Workers Builds
+
+Create the two queues if the import flow has not created them:
+
+```sh
+npx wrangler queues create mailroom-drafts
+npx wrangler queues create mailroom-drafts-dlq
+```
+
+Connect the repository in **Workers & Pages → Create → Import a repository**.
+Use `main` as the production branch, leave the build command empty, and set the
+deploy command to `npm run deploy`.
+
+Add `DATABASE_URL` as a **build secret**, with the migration role's direct URL.
+The build runner must be able to reach PostgreSQL and trust its TLS certificate.
+This variable is for the Node migration script; do not add it to `vars`, prefix
+it with `VITE_`, or expose it to the frontend. Hyperdrive holds the runtime
+credentials. If the database is private, run migrations from a trusted network
+before release and configure the build deploy command as
+`node scripts/check-database-config.mjs && npm run build && node scripts/deploy.mjs`.
+
+Review the bindings: `HYPERDRIVE`, `AI`, `EMAIL`, `DRAFT_QUEUE`, `DRAFT_DLQ`, and
+`OAUTH_KV`. The queue consumer and dead-letter names must match their producers.
+The ID-less OAuth KV binding is provisioned by Wrangler. Outbound sending also
+requires domain onboarding; a binding alone does not authorize a sender.
+
+Push the completed configuration to trigger the first build. The default deploy
+command builds the app, applies pending PostgreSQL migrations, then uploads the
+Worker and assets. It also provisions missing VAPID keys. Continue below before
+routing real mail to the Worker.
 
 ## 2. Protect the web app before adding email
 
@@ -227,43 +281,6 @@ git push
 Keep your own values when conflicts touch instance-specific files:
 `wrangler.jsonc` holds your Worker and resource names.
 
-### Upgrading from the separate MCP Worker
-
-Earlier versions deployed MCP as a second Worker (`mailroom-mcp`, configured
-by `wrangler.mcp.jsonc`). After updating, the main Worker serves MCP at
-`https://<your-web-hostname>/mcp`, with its own KV namespace. Add the Bypass
-application above, reconnect each MCP client to the new URL, then delete the
-old `mailroom-mcp` Worker, its KV namespace, and its `/authorize` Access
-application. The old Worker keeps working until you delete it. Existing grants
-do not carry over.
-
-## Manual setup / an existing fork
-
-If you already forked the repository instead of using the button, create and
-bind your own resources before connecting Workers Builds:
-
-```sh
-npm ci
-npx wrangler login
-npx wrangler d1 create mailroom
-npx wrangler r2 bucket create mailroom-raw
-npx wrangler queues create mailroom-drafts
-npx wrangler queues create mailroom-drafts-dlq
-```
-
-No database ID needs to be copied: Wrangler looks up `database_name` in your
-account. `OAUTH_KV` has no ID either; Wrangler creates it on the first deploy
-and reuses it afterwards. If the database already exists, skip its create command and reuse it
-only if it belongs to this instance. If you chose different resource names,
-update the database, bucket, producer queues, consumer queue, and dead-letter
-queue in `wrangler.jsonc`. Local development uses `wrangler.dev.jsonc` and does
-not need a Cloudflare database.
-
-Commit your instance configuration, connect that GitHub repository through
-**Workers & Pages → Create → Import a repository**, and use `npm run deploy` as
-the deploy command with an empty build command. Future production-branch pushes
-deploy automatically. Continue with Access and domain setup above.
-
 ## Troubleshooting
 
 - **Button cannot import the repository:** the upstream repository must be public.
@@ -271,19 +288,14 @@ deploy automatically. Continue with Access and domain setup above.
   connected under the Worker's **Settings → Build** and that the deploy command
   is `npm run deploy`. Builds only run on the production branch (normally
   `main`).
-- **D1 database not found:** check the `DB` binding in your instance's config;
-  `database_name` must match a database in the authenticated Cloudflare account.
-  For manual setup, create it before running migrations. If an explicit
-  `database_id` was added by Cloudflare, verify it matches that database too.
-- **Local data appears empty after removing an old database ID:** Wrangler's
-  local storage identity changes when the ID is removed. The previous local
-  files remain under `.wrangler/state`; they are not deleted. Run
-  `npm run db:migrate:local` to initialize the new local database and optionally
-  `npm run db:seed:local` for demo data. Back up/export any local data you need
-  before switching configurations; production data is unaffected.
+- **Database migration fails:** verify the build secret `DATABASE_URL`, network
+  access, certificate trust, database ownership, and PostgreSQL logs. Stop the
+  release if migration fails; do not run the Worker against an incomplete schema.
+- **Hyperdrive connection fails:** replace the all-zero ID, verify origin
+  credentials and TLS, and confirm query caching is disabled. Local development
+  uses the direct local URL instead of the production Hyperdrive config.
 - **Missing queue / dead-letter queue:** check both queues exist and the
   consumer names match the producer bindings, especially after renaming them.
-- **R2 binding fails:** enable R2 in the destination account first.
 - **App loads but replies fail:** check Email Sending access, the paid plan,
   sender-domain verification, and the Inbox's sending address.
 - **Inbound mail does not appear:** check Email Routing targets this Worker and
@@ -294,3 +306,28 @@ deploy automatically. Continue with Access and domain setup above.
 - **MCP OAuth redirects to Access before discovery:** add the Bypass
   application for `/mcp` and `/.well-known` on that hostname. The
   card in **Settings → General** confirms when it works.
+
+## Storage operations and verification
+
+Start local PostgreSQL with `npm run db:start`, then run
+`npm run db:migrate:local`, `npm run db:seed:local`, `npm run check`, and
+`npm test`. The seed command refuses a non-empty local inbox database. Tests
+create and remove only their own randomly named schemas. The development volume
+is retained across restarts; `docker compose stop` preserves it.
+
+Before first production use, verify receipt of a MIME message with an attachment,
+byte-for-byte download, a reply and new outbound message, full-text search,
+MCP reads, and inbox deletion. The local test suite exercises these database
+paths with a real PostgreSQL server and mocks paid email/AI delivery. A successful
+local build does not verify VPS networking or the production Hyperdrive binding.
+
+Back up the database, including binary content, before future schema changes:
+
+```sh
+pg_dump --format=custom --file=mailroom.dump "$DATABASE_URL"
+```
+
+Keep encrypted backups away from the VPS and test a restore into a separate
+database. Monitor free disk, WAL growth, backup size, and query latency. A Worker
+rollback does not undo a PostgreSQL migration. No legacy D1/R2 import is provided
+because this instance has never been deployed and has no data to preserve.

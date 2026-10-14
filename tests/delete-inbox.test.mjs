@@ -1,99 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
-import {
-  deleteInbox,
-  InboxDeletionError,
-  purgeInboxObjects,
-} from "../src/worker/inbox/delete.ts";
+import { databaseFixture } from "./helpers/postgres.mjs";
+import { deleteInbox, InboxDeletionError } from "../src/worker/inbox/delete.ts";
 
-class SqliteD1Statement {
-  constructor(database, sql, args = []) {
-    this.database = database;
-    this.sql = sql;
-    this.args = args;
-  }
-
-  bind(...args) {
-    return new SqliteD1Statement(this.database, this.sql, args);
-  }
-
-  async first() {
-    return this.database.prepare(this.sql).get(...this.args) ?? null;
-  }
-
-  async all() {
-    return { results: this.database.prepare(this.sql).all(...this.args) };
-  }
-
-  async run() {
-    const result = this.database.prepare(this.sql).run(...this.args);
-    return {
-      success: true,
-      meta: {
-        changes: Number(result.changes),
-        last_row_id: Number(result.lastInsertRowid),
-      },
-    };
-  }
-}
-
-class SqliteD1 {
-  constructor(database) {
-    this.database = database;
-  }
-
-  prepare(sql) {
-    return new SqliteD1Statement(this.database, sql);
-  }
-
-  async batch(statements) {
-    this.database.exec("BEGIN IMMEDIATE");
-    try {
-      const results = [];
-      for (const statement of statements) results.push(await statement.run());
-      this.database.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
-  }
-}
-
-class FakeR2 {
-  constructor(keys) {
-    this.keys = new Set(keys);
-    this.deleted = [];
-  }
-
-  async list({ prefix, limit = 1_000 }) {
-    const objects = [...this.keys]
-      .filter((key) => key.startsWith(prefix))
-      .sort()
-      .slice(0, limit)
-      .map((key) => ({ key }));
-    return { objects, delimitedPrefixes: [], truncated: false };
-  }
-
-  async delete(input) {
-    const keys = Array.isArray(input) ? input : [input];
-    for (const key of keys) {
-      this.keys.delete(key);
-      this.deleted.push(key);
-    }
-  }
-}
-
-function makeFixture() {
-  const database = new DatabaseSync(":memory:");
-  database.exec("PRAGMA foreign_keys = ON");
-  for (const filename of readdirSync("migrations").filter((name) => name.endsWith(".sql")).sort()) {
-    database.exec(readFileSync(`migrations/${filename}`, "utf8"));
-  }
-
-  database.exec(`
+async function makeFixture(t) {
+  const database = await databaseFixture(t);
+  await database.query(`
     INSERT INTO domains (id, name, status) VALUES (1, 'example.com', 'active');
     INSERT INTO mailboxes (id, address, domain_id) VALUES
       (1, 'support@example.com', 1),
@@ -103,12 +15,16 @@ function makeFixture() {
     VALUES
       (10, 1, 'Target', 'target', 'target', 1, '2026-09-01T00:00:00.000Z'),
       (20, 2, 'Sibling', 'sibling', 'sibling', 1, '2026-09-01T00:00:00.000Z');
+    INSERT INTO stored_files (key, mailbox_id, content, content_type) VALUES
+      ('raw/1/target.eml', 1, decode('00ff', 'hex'), 'message/rfc822'),
+      ('attachments/1/100/file', 1, decode('00ff', 'hex'), 'text/plain'),
+      ('raw/2/sibling.eml', 2, decode('00ff', 'hex'), 'message/rfc822');
     INSERT INTO messages
       (id, thread_id, message_id, direction, from_address, subject, text_body, raw_key)
     VALUES
       (100, 10, '<target@example.com>', 'inbound', 'customer@example.net', 'Target', 'Target body', 'raw/1/target.eml'),
       (200, 20, '<sibling@example.com>', 'inbound', 'customer@example.net', 'Sibling', 'Sibling body', 'raw/2/sibling.eml');
-    INSERT INTO attachments (id, message_id, content_type, size, r2_key)
+    INSERT INTO attachments (id, message_id, content_type, size, file_key)
     VALUES (1000, 100, 'text/plain', 6, 'attachments/1/100/file');
     INSERT INTO playbooks (id, mailbox_id, name, when_to_use, instructions)
     VALUES (1000, 1, 'Returns', 'A return request', 'Reply carefully');
@@ -129,30 +45,30 @@ function makeFixture() {
     INSERT INTO thread_labels (thread_id, label_id) VALUES (10, 500);
   `);
 
-  const RAW = new FakeR2([
-    "raw/1/target.eml",
-    "attachments/1/100/file",
-    "raw/2/sibling.eml",
-  ]);
-  return { database, DB: new SqliteD1(database), RAW };
+  return { database, DB: database };
 }
 
-function count(database, table, where = "1 = 1") {
-  return Number(database.prepare(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`).get().count);
+async function count(database, table, where = "1 = 1") {
+  return (
+    await database.one(`SELECT COUNT(*) AS count FROM ${table} WHERE ${where}`)
+  ).count;
 }
 
-test("deleting an inbox removes its data and objects but keeps its domain and siblings", async () => {
-  const fixture = makeFixture();
+test("deleting an inbox removes its data and objects but keeps its domain and siblings", async (t) => {
+  const fixture = await makeFixture(t);
   const deleted = await deleteInbox(fixture, {
     id: 1,
     confirmAddress: "support@example.com",
   });
-  await purgeInboxObjects(fixture.RAW, deleted.id);
 
-  assert.deepEqual(deleted, { id: 1, address: "support@example.com", domainId: 1 });
-  assert.equal(count(fixture.database, "mailboxes", "id = 1"), 0);
-  assert.equal(count(fixture.database, "mailboxes", "id = 2"), 1);
-  assert.equal(count(fixture.database, "domains", "id = 1"), 1);
+  assert.deepEqual(deleted, {
+    id: 1,
+    address: "support@example.com",
+    domainId: 1,
+  });
+  assert.equal(await count(fixture.database, "mailboxes", "id = 1"), 0);
+  assert.equal(await count(fixture.database, "mailboxes", "id = 2"), 1);
+  assert.equal(await count(fixture.database, "domains", "id = 1"), 1);
   for (const table of [
     "threads",
     "messages",
@@ -165,45 +81,49 @@ test("deleting an inbox removes its data and objects but keeps its domain and si
     "labels",
     "thread_labels",
   ]) {
-    assert.equal(count(fixture.database, table), table === "threads" || table === "messages" ? 1 : 0);
+    assert.equal(
+      await count(fixture.database, table),
+      table === "threads" || table === "messages" ? 1 : 0,
+    );
   }
-  assert.deepEqual(fixture.RAW.deleted.sort(), [
-    "attachments/1/100/file",
-    "raw/1/target.eml",
-  ]);
-  assert.deepEqual([...fixture.RAW.keys], ["raw/2/sibling.eml"]);
+  assert.deepEqual(
+    (await fixture.database.query("SELECT key FROM stored_files")).rows,
+    [{ key: "raw/2/sibling.eml" }],
+  );
 });
 
-test("an unknown inbox returns 404 without deleting data or objects", async () => {
-  const fixture = makeFixture();
+test("an unknown inbox returns 404 without deleting data or objects", async (t) => {
+  const fixture = await makeFixture(t);
 
   await assert.rejects(
     deleteInbox(fixture, { id: 999, confirmAddress: "missing@example.com" }),
     (error) => error instanceof InboxDeletionError && error.status === 404,
   );
-  assert.equal(count(fixture.database, "mailboxes"), 2);
-  assert.equal(fixture.RAW.deleted.length, 0);
+  assert.equal(await count(fixture.database, "mailboxes"), 2);
+  assert.equal(await count(fixture.database, "stored_files"), 3);
 });
 
-test("the exact inbox address is required before deletion", async () => {
-  const fixture = makeFixture();
+test("the exact inbox address is required before deletion", async (t) => {
+  const fixture = await makeFixture(t);
 
   await assert.rejects(
     deleteInbox(fixture, { id: 1, confirmAddress: "sales@example.com" }),
     (error) => error instanceof InboxDeletionError && error.status === 400,
   );
-  assert.equal(count(fixture.database, "mailboxes"), 2);
-  assert.equal(fixture.RAW.deleted.length, 0);
+  assert.equal(await count(fixture.database, "mailboxes"), 2);
+  assert.equal(await count(fixture.database, "stored_files"), 3);
 });
 
-test("an active send blocks inbox deletion", async () => {
-  const fixture = makeFixture();
-  fixture.database.prepare("UPDATE reply_attempts SET status = 'sending' WHERE id = 'reply-sent'").run();
+test("an active send blocks inbox deletion", async (t) => {
+  const fixture = await makeFixture(t);
+  await fixture.database.query(
+    "UPDATE reply_attempts SET status = 'sending' WHERE id = 'reply-sent'",
+  );
 
   await assert.rejects(
     deleteInbox(fixture, { id: 1, confirmAddress: "support@example.com" }),
     (error) => error instanceof InboxDeletionError && error.status === 409,
   );
-  assert.equal(count(fixture.database, "mailboxes", "id = 1"), 1);
-  assert.equal(fixture.RAW.deleted.length, 0);
+  assert.equal(await count(fixture.database, "mailboxes", "id = 1"), 1);
+  assert.equal(await count(fixture.database, "stored_files"), 3);
 });

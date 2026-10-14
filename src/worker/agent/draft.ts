@@ -1,7 +1,8 @@
+import { statement } from "../database.ts";
 import { generateText } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 import { getAiModel } from "../ai-model.ts";
-import type { Draft } from "../../shared/types";
+import type { Draft } from "../../shared/types.ts";
 
 const MAX_CONTEXT_MESSAGES = 12;
 const MAX_MESSAGE_CHARS = 24_000;
@@ -61,62 +62,89 @@ export class DraftRevisionError extends Error {
 }
 
 export async function processDraftRun(env: Env, runId: number): Promise<void> {
-  const claimed = await env.DB.prepare(
+  const claimed = await env.DB.one<{ id: number }>(
     `UPDATE draft_runs
      SET status = 'generating', attempt_count = attempt_count + 1,
-         error = NULL, started_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), finished_at = NULL
-     WHERE id = ? AND status IN ('queued', 'failed')
+         error = NULL, started_at = now(), finished_at = NULL
+     WHERE id = $1 AND status IN ('queued', 'failed')
      RETURNING id`,
-  )
-    .bind(runId)
-    .first<{ id: number }>();
+    [runId],
+  );
   if (!claimed) return;
 
   try {
     const context = await loadRunContext(env, runId);
     if (!context || context.agent_mode === "off") {
-      await markSuperseded(env, runId, "Agent drafting is disabled for this Inbox");
+      await markSuperseded(
+        env,
+        runId,
+        "Agent drafting is disabled for this Inbox",
+      );
       return;
     }
 
-    if (!(await isLatestInbound(env, context.thread_id, context.inbound_message_id))) {
+    if (
+      !(await isLatestInbound(
+        env,
+        context.thread_id,
+        context.inbound_message_id,
+      ))
+    ) {
       await markSuperseded(env, runId, "A newer customer message arrived");
       return;
     }
 
     const inputs = await loadDraftInputs(env, context);
     if (!inputs) {
-      await markSuperseded(env, runId, "The target message is no longer draftable");
+      await markSuperseded(
+        env,
+        runId,
+        "The target message is no longer draftable",
+      );
       return;
     }
 
     const generated = await generateAgentReply(env, context, inputs);
 
-    if (!(await isLatestInbound(env, context.thread_id, context.inbound_message_id))) {
-      await markSuperseded(env, runId, "A newer customer message arrived during generation");
+    if (
+      !(await isLatestInbound(
+        env,
+        context.thread_id,
+        context.inbound_message_id,
+      ))
+    ) {
+      await markSuperseded(
+        env,
+        runId,
+        "A newer customer message arrived during generation",
+      );
       return;
     }
 
-    const draft = await storeAgentDraft(env, context, generated, draftNote(generated, inputs));
+    const draft = await storeAgentDraft(
+      env,
+      context,
+      generated,
+      draftNote(generated, inputs),
+    );
 
-    await env.DB.prepare(
+    await env.DB.query(
       `UPDATE draft_runs
-       SET status = 'ready', draft_id = ?, error = NULL,
-           finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ?`,
-    )
-      .bind(draft.id, runId)
-      .run();
+       SET status = 'ready', draft_id = $1, error = NULL,
+           finished_at = now()
+       WHERE id = $2`,
+      [draft.id, runId],
+    );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Draft generation failed";
-    await env.DB.prepare(
+    const message =
+      error instanceof Error ? error.message : "Draft generation failed";
+    await env.DB.query(
       `UPDATE draft_runs
-       SET status = 'failed', error = ?,
-           finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ?`,
-    )
-      .bind(message.slice(0, 2000), runId)
-      .run();
+       SET status = 'failed', error = $1,
+           finished_at = now()
+       WHERE id = $2`,
+      [message.slice(0, 2000), runId],
+    );
     throw error;
   }
 }
@@ -132,7 +160,12 @@ export async function reviseDraft(
   threadId: number,
   revision: DraftRevision,
 ): Promise<Draft> {
-  const context = await env.DB.prepare(
+  const context = await env.DB.one<
+    DraftContext & {
+      inbound_message_id: number | null;
+      run_status: string | null;
+    }
+  >(
     `SELECT t.id AS thread_id, t.subject, m.address, m.agent_mode, m.agent_instructions,
             latest.id AS inbound_message_id, dr.status AS run_status
      FROM threads t
@@ -142,13 +175,15 @@ export async function reviseDraft(
        ORDER BY created_at DESC, id DESC LIMIT 1
      )
      LEFT JOIN draft_runs dr ON dr.inbound_message_id = latest.id
-     WHERE t.id = ?`,
-  )
-    .bind(threadId)
-    .first<DraftContext & { inbound_message_id: number | null; run_status: string | null }>();
+     WHERE t.id = $1`,
+    [threadId],
+  );
   if (!context) throw new DraftRevisionError("Conversation not found", 404);
   if (context.inbound_message_id === null) {
-    throw new DraftRevisionError("This conversation has no customer message to reply to", 409);
+    throw new DraftRevisionError(
+      "This conversation has no customer message to reply to",
+      409,
+    );
   }
   // A queued run would overwrite the revision when it finishes.
   if (context.run_status === "queued" || context.run_status === "generating") {
@@ -156,22 +191,30 @@ export async function reviseDraft(
   }
 
   const inputs = await loadDraftInputs(env, context, "manual");
-  if (!inputs) throw new DraftRevisionError("This conversation has no customer message to reply to", 409);
+  if (!inputs)
+    throw new DraftRevisionError(
+      "This conversation has no customer message to reply to",
+      409,
+    );
 
   const generated = await generateAgentReply(env, context, inputs, revision);
-  if (!(await isLatestInbound(env, context.thread_id, context.inbound_message_id))) {
-    throw new DraftRevisionError("A newer customer message arrived while drafting", 409);
+  if (
+    !(await isLatestInbound(env, context.thread_id, context.inbound_message_id))
+  ) {
+    throw new DraftRevisionError(
+      "A newer customer message arrived while drafting",
+      409,
+    );
   }
 
   const note = `${draftNote(generated, inputs)}\n\nReviewer instruction: ${revision.instruction || "(none)"}`;
   const { id } = await storeAgentDraft(env, context, generated, note);
-  const draft = await env.DB.prepare(
+  const draft = await env.DB.one<Draft>(
     `SELECT d.*, p.name AS playbook_name
      FROM drafts d LEFT JOIN playbooks p ON p.id = d.playbook_id
-     WHERE d.id = ?`,
-  )
-    .bind(id)
-    .first<Draft>();
+     WHERE d.id = $1`,
+    [id],
+  );
   if (!draft) throw new Error("The generated draft could not be stored");
   return draft;
 }
@@ -186,26 +229,25 @@ async function loadDraftInputs(
   context: DraftContext,
   mode: "automatic" | "manual" = "automatic",
 ): Promise<DraftInputs | null> {
-  const upTo = mode === "automatic" ? "AND id <= ?" : "";
-  const { results: messages } = await env.DB.prepare(
+  const upTo = mode === "automatic" ? "AND id <= $2" : "";
+  const { rows: messages } = await env.DB.query<{
+    id: number;
+    direction: string;
+    sent_by: string;
+    from_address: string;
+    from_name: string | null;
+    text_body: string | null;
+    is_auto_submitted: number;
+  }>(
     `SELECT id, direction, sent_by, from_address, from_name, text_body, is_auto_submitted
-     FROM messages WHERE thread_id = ? ${upTo}
-     ORDER BY created_at DESC, id DESC LIMIT ?`,
-  )
-    .bind(
+     FROM messages WHERE thread_id = $1 ${upTo}
+     ORDER BY created_at DESC, id DESC LIMIT $${mode === "automatic" ? 3 : 2}`,
+    [
       ...(mode === "automatic"
         ? [context.thread_id, context.inbound_message_id, MAX_CONTEXT_MESSAGES]
         : [context.thread_id, MAX_CONTEXT_MESSAGES]),
-    )
-    .all<{
-      id: number;
-      direction: string;
-      sent_by: string;
-      from_address: string;
-      from_name: string | null;
-      text_body: string | null;
-      is_auto_submitted: number;
-    }>();
+    ],
+  );
 
   const latest = messages[0];
   if (!latest) return null;
@@ -214,37 +256,37 @@ async function loadDraftInputs(
     (latest.id !== context.inbound_message_id ||
       latest.direction !== "inbound" ||
       latest.is_auto_submitted)
-  ) return null;
+  )
+    return null;
 
   const transcript = [...messages]
     .reverse()
     .map((message) => {
-      const who = message.direction === "outbound"
-        ? `${context.address} (us, sent by ${message.sent_by})`
-        : message.from_name
-          ? `${message.from_name} <${message.from_address}>`
-          : message.from_address;
+      const who =
+        message.direction === "outbound"
+          ? `${context.address} (us, sent by ${message.sent_by})`
+          : message.from_name
+            ? `${message.from_name} <${message.from_address}>`
+            : message.from_address;
       const body = (message.text_body ?? "").trim().slice(0, MAX_MESSAGE_CHARS);
       return `From: ${who}\n${body}`;
     })
     .join("\n\n---\n\n");
 
-  const [{ results: playbooks }, { results: attachments }] = await Promise.all([
-    env.DB.prepare(
+  const [{ rows: playbooks }, { rows: attachments }] = await Promise.all([
+    env.DB.query<AvailablePlaybook>(
       `SELECT id, name, when_to_use, instructions, example_reply
        FROM playbooks
-       WHERE mailbox_id = (SELECT mailbox_id FROM threads WHERE id = ?)
+       WHERE mailbox_id = (SELECT mailbox_id FROM threads WHERE id = $1)
          AND enabled = 1
        ORDER BY updated_at DESC, id DESC`,
-    )
-      .bind(context.thread_id)
-      .all<AvailablePlaybook>(),
-    env.DB.prepare(
+      [context.thread_id],
+    ),
+    env.DB.query<{ filename: string; content_type: string; size: number }>(
       `SELECT COALESCE(filename, 'unnamed attachment') AS filename, content_type, size
-       FROM attachments WHERE message_id = ? ORDER BY id`,
-    )
-      .bind(context.inbound_message_id)
-      .all<{ filename: string; content_type: string; size: number }>(),
+       FROM attachments WHERE message_id = $1 ORDER BY id`,
+      [context.inbound_message_id],
+    ),
   ]);
 
   return {
@@ -280,25 +322,27 @@ async function storeAgentDraft(
   note: string,
 ): Promise<{ id: number }> {
   const [, inserted] = await env.DB.batch<{ id: number }>([
-    env.DB.prepare(
+    statement(
       `UPDATE drafts SET status = 'discarded'
-       WHERE thread_id = ? AND created_by = 'agent' AND status = 'pending'`,
-    ).bind(context.thread_id),
-    env.DB.prepare(
+       WHERE thread_id = $1 AND created_by = 'agent' AND status = 'pending'`,
+      [context.thread_id],
+    ),
+    statement(
       `INSERT INTO drafts
          (thread_id, text_body, created_by, agent_notes, playbook_id, status,
           source_inbound_message_id)
-       VALUES (?, ?, 'agent', ?, ?, 'pending', ?)
+       VALUES ($1, $2, 'agent', $3, $4, 'pending', $5)
        RETURNING id`,
-    ).bind(
-      context.thread_id,
-      generated.body,
-      note,
-      generated.playbook?.id ?? null,
-      context.inbound_message_id,
+      [
+        context.thread_id,
+        generated.body,
+        note,
+        generated.playbook?.id ?? null,
+        context.inbound_message_id,
+      ],
     ),
   ]);
-  const draft = inserted?.results[0];
+  const draft = inserted?.rows[0];
   if (!draft) throw new Error("The generated draft could not be stored");
   return draft;
 }
@@ -309,17 +353,19 @@ function draftNote(generated: GeneratedReply, inputs: DraftInputs): string {
     : `Generated by ${generated.model} from the last ${inputs.messageCount} message(s); no playbook matched.`;
 }
 
-async function loadRunContext(env: Env, runId: number): Promise<DraftRunContext | null> {
-  return env.DB.prepare(
+async function loadRunContext(
+  env: Env,
+  runId: number,
+): Promise<DraftRunContext | null> {
+  return env.DB.one<DraftRunContext>(
     `SELECT dr.id AS run_id, dr.thread_id, dr.inbound_message_id,
             t.subject, m.address, m.agent_mode, m.agent_instructions
      FROM draft_runs dr
      JOIN threads t ON t.id = dr.thread_id
      JOIN mailboxes m ON m.id = t.mailbox_id
-     WHERE dr.id = ?`,
-  )
-    .bind(runId)
-    .first<DraftRunContext>();
+     WHERE dr.id = $1`,
+    [runId],
+  );
 }
 
 async function isLatestInbound(
@@ -327,45 +373,55 @@ async function isLatestInbound(
   threadId: number,
   inboundMessageId: number,
 ): Promise<boolean> {
-  const latest = await env.DB.prepare(
+  const latest = await env.DB.one<{ id: number }>(
     `SELECT id FROM messages
-     WHERE thread_id = ? AND direction = 'inbound'
+     WHERE thread_id = $1 AND direction = 'inbound'
      ORDER BY created_at DESC, id DESC LIMIT 1`,
-  )
-    .bind(threadId)
-    .first<{ id: number }>();
+    [threadId],
+  );
   return latest?.id === inboundMessageId;
 }
 
-async function markSuperseded(env: Env, runId: number, reason: string): Promise<void> {
-  await env.DB.prepare(
+async function markSuperseded(
+  env: Env,
+  runId: number,
+  reason: string,
+): Promise<void> {
+  await env.DB.query(
     `UPDATE draft_runs
-     SET status = 'superseded', error = ?,
-         finished_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE id = ?`,
-  )
-    .bind(reason, runId)
-    .run();
+     SET status = 'superseded', error = $1,
+         finished_at = now()
+     WHERE id = $2`,
+    [reason, runId],
+  );
 }
 
 export function buildDraftPrompt(
   context: Pick<DraftContext, "subject" | "address" | "agent_instructions">,
-  inputs: Pick<DraftInputs, "transcript" | "playbooks" | "attachments"> & { followUp?: boolean },
+  inputs: Pick<DraftInputs, "transcript" | "playbooks" | "attachments"> & {
+    followUp?: boolean;
+  },
   revision?: DraftRevision,
 ): { system: string; prompt: string } {
   const { playbooks, attachments } = inputs;
-  const instruction = revision?.instruction.trim().slice(0, MAX_REVISION_INSTRUCTION_CHARS) ?? "";
-  const currentText = revision?.currentText.trim().slice(0, MAX_REVISION_TEXT_CHARS) ?? "";
-  const revisionContext = revision && (instruction || currentText)
-    ? [
-        "REVIEWER GUIDANCE — the human reviewing this reply asked for the following. It comes from our team, not the customer, and takes priority over the playbooks where they conflict:",
-        instruction || "(No specific instruction; write a fresh, better version.)",
-        currentText
-          ? "The reviewer's current reply draft follows the transcript. Revise it according to the guidance, keeping what the guidance does not ask to change."
-          : null,
-        "The guidance language does not change the reply language unless the guidance asks for it.",
-      ].filter(Boolean).join("\n")
-    : null;
+  const instruction =
+    revision?.instruction.trim().slice(0, MAX_REVISION_INSTRUCTION_CHARS) ?? "";
+  const currentText =
+    revision?.currentText.trim().slice(0, MAX_REVISION_TEXT_CHARS) ?? "";
+  const revisionContext =
+    revision && (instruction || currentText)
+      ? [
+          "REVIEWER GUIDANCE — the human reviewing this reply asked for the following. It comes from our team, not the customer, and takes priority over the playbooks where they conflict:",
+          instruction ||
+            "(No specific instruction; write a fresh, better version.)",
+          currentText
+            ? "The reviewer's current reply draft follows the transcript. Revise it according to the guidance, keeping what the guidance does not ask to change."
+            : null,
+          "The guidance language does not change the reply language unless the guidance asks for it.",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : null;
   const playbookContext = playbooks.length
     ? playbooks
         .map((playbook) =>
@@ -377,14 +433,19 @@ export function buildDraftPrompt(
               ? `EXAMPLE REPLY (use as guidance, not a script):\n${playbook.example_reply}`
               : null,
             "</playbook>",
-          ].filter(Boolean).join("\n"),
+          ]
+            .filter(Boolean)
+            .join("\n"),
         )
         .join("\n\n")
     : "No playbooks are available for this Inbox.";
   const attachmentContext = attachments.length
     ? [
         "The latest customer email includes attachments that you have NOT inspected:",
-        ...attachments.map((item) => `- ${item.filename} (${item.content_type}, ${item.size} bytes)`),
+        ...attachments.map(
+          (item) =>
+            `- ${item.filename} (${item.content_type}, ${item.size} bytes)`,
+        ),
         "Do not claim to have read their contents. Ask the reviewer or customer when their contents are required.",
       ].join("\n")
     : "The latest customer email has no attachments.";
@@ -392,7 +453,8 @@ export function buildDraftPrompt(
   const system = [
     `You are the email support agent for ${context.address}.`,
     "BASE INSTRUCTIONS — apply these to every reply:",
-    context.agent_instructions?.trim() || "Be helpful, concise and professional.",
+    context.agent_instructions?.trim() ||
+      "Be helpful, concise and professional.",
     "AVAILABLE PLAYBOOKS — select at most one only when its WHEN TO USE clearly matches the latest customer request:",
     playbookContext,
     attachmentContext,
@@ -407,14 +469,18 @@ export function buildDraftPrompt(
     "PLAYBOOK: <the numeric playbook id, or NONE>",
     "REPLY:",
     "<the complete reply body; no subject line and no placeholders like [Your Name]>",
-  ].filter((line) => line !== null).join("\n");
+  ]
+    .filter((line) => line !== null)
+    .join("\n");
 
   const prompt = [
     `Subject: ${context.subject}\n\n${inputs.transcript}`,
     revisionContext && currentText
       ? `=== REVIEWER'S CURRENT REPLY DRAFT ===\n${currentText}\n=== END OF CURRENT REPLY DRAFT ===`
       : null,
-  ].filter(Boolean).join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   return { system, prompt };
 }
@@ -424,10 +490,13 @@ export function parseDraftOutput(
   playbooks: AvailablePlaybook[],
 ): { body: string; playbook: AvailablePlaybook | null } {
   const text = raw.trim();
-  const formatted = text.match(/^PLAYBOOK:\s*(NONE|\d+)\s*\n+REPLY:\s*\n?([\s\S]*)$/i);
+  const formatted = text.match(
+    /^PLAYBOOK:\s*(NONE|\d+)\s*\n+REPLY:\s*\n?([\s\S]*)$/i,
+  );
   if (!formatted) return { body: text, playbook: null };
 
-  const playbookId = formatted[1].toUpperCase() === "NONE" ? null : Number(formatted[1]);
+  const playbookId =
+    formatted[1].toUpperCase() === "NONE" ? null : Number(formatted[1]);
   return {
     body: formatted[2].trim(),
     playbook: playbooks.find((playbook) => playbook.id === playbookId) ?? null,

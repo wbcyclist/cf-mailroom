@@ -1,3 +1,4 @@
+import type { Database } from "../worker/database.ts";
 import {
   AuthorizationError,
   type AuthRequest,
@@ -19,7 +20,7 @@ import {
 } from "./authorization-security.ts";
 
 export interface AuthorizationEnv extends WebAccessEnv {
-  DB: D1Database;
+  DB: Database;
   OAUTH_PROVIDER: OAuthHelpers;
 }
 

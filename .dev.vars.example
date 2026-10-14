@@ -1,4 +1,7 @@
-# No secrets are required for the initial deployment or local development.
+# PostgreSQL local credentials are configured in wrangler.dev.jsonc.
+# Production migration credentials belong in .env or the build secret DATABASE_URL.
+# Do not copy DATABASE_URL into Worker runtime vars.
+# No additional runtime secrets are needed for local development.
 # Optional browser notifications: copy to .dev.vars, uncomment the lines below,
 # and fill in a matching key pair from `npm run vapid:generate`.
 # For production, add these as Worker secrets; see docs/deployment.md.

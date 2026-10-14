@@ -16,28 +16,26 @@ export async function labelNewThread(
 ): Promise<void> {
   if (!env.AI) return;
 
-  const message = await env.DB.prepare(
+  const message = await env.DB.one<{
+    subject: string;
+    from_address: string;
+    from_name: string | null;
+    text_body: string | null;
+    mailbox_id: number;
+  }>(
     `SELECT msg.subject, msg.from_address, msg.from_name, msg.text_body,
             t.mailbox_id
      FROM messages msg
      JOIN threads t ON t.id = msg.thread_id
-     WHERE msg.id = ? AND msg.thread_id = ?`,
-  )
-    .bind(inboundMessageId, threadId)
-    .first<{
-      subject: string;
-      from_address: string;
-      from_name: string | null;
-      text_body: string | null;
-      mailbox_id: number;
-    }>();
+     WHERE msg.id = $1 AND msg.thread_id = $2`,
+    [inboundMessageId, threadId],
+  );
   if (!message) return;
 
-  const { results: labels } = await env.DB.prepare(
-    "SELECT id, name, condition FROM labels WHERE mailbox_id = ? ORDER BY id",
-  )
-    .bind(message.mailbox_id)
-    .all<LabelRule>();
+  const { rows: labels } = await env.DB.query<LabelRule>(
+    "SELECT id, name, condition FROM labels WHERE mailbox_id = $1 ORDER BY id",
+    [message.mailbox_id],
+  );
   if (labels.length === 0) return;
 
   const evaluatedLabels = labels.slice(0, MAX_LABELS_PER_EVALUATION);
@@ -54,15 +52,16 @@ export async function labelNewThread(
 
   const matched = matchedLabelIds(evaluatedLabels, response);
   for (const labelId of matched) {
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO thread_labels (thread_id, label_id) VALUES (?, ?)",
-    )
-      .bind(threadId, labelId)
-      .run();
+    await env.DB.query(
+      "INSERT INTO thread_labels (thread_id, label_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+      [threadId, labelId],
+    );
   }
 }
 
-export function buildJevQuestions(labels: LabelRule[]): Record<string, unknown> {
+export function buildJevQuestions(
+  labels: LabelRule[],
+): Record<string, unknown> {
   return Object.fromEntries(
     labels.map((label) => [
       questionKey(label.id),
@@ -105,8 +104,15 @@ function questionKey(labelId: number): string {
 function jevNoul(answers: unknown, key: string): number {
   const answer = (answers as Record<string, unknown> | null)?.[key];
   const noul = (answer as { noul?: unknown } | null)?.noul;
-  if (typeof noul !== "number" || !Number.isFinite(noul) || noul < 0 || noul > 1) {
-    throw new Error(`Invalid JEV response: missing or invalid probability for ${key}`);
+  if (
+    typeof noul !== "number" ||
+    !Number.isFinite(noul) ||
+    noul < 0 ||
+    noul > 1
+  ) {
+    throw new Error(
+      `Invalid JEV response: missing or invalid probability for ${key}`,
+    );
   }
   return noul;
 }

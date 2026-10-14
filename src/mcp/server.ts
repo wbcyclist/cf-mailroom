@@ -20,7 +20,6 @@ import type { McpIdentity } from "./auth-types.ts";
 
 export interface McpEnv extends InboxDataEnv, SendEmailEnv {
   MCP_DAILY_SEND_LIMIT?: string;
-  RAW: R2Bucket;
 }
 
 const inboxSchema = z.object({
@@ -420,9 +419,7 @@ async function sendOutput(
   conversationId: number | null,
 ) {
   const message = result.message_id
-    ? await env.DB.prepare("SELECT id FROM messages WHERE message_id = ?")
-        .bind(result.message_id)
-        .first<{ id: number }>()
+    ? await env.DB.one<{ id: number }>("SELECT id FROM messages WHERE message_id = $1", [result.message_id])
     : null;
   return {
     attempt_id: result.attempt_id,

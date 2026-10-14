@@ -1,3 +1,4 @@
+import { type Database, statement } from "../database.ts";
 import { normalizeSubject } from "./rules.ts";
 import type { ComposeAttemptResult } from "../../shared/types.ts";
 export type { ComposeAttemptResult } from "../../shared/types.ts";
@@ -16,8 +17,7 @@ import { sendEmail, type SendEmailEnv } from "./send.ts";
 import { claimDailySendBudget } from "./send-budget.ts";
 
 export interface ComposeEnv extends SendEmailEnv {
-  DB: D1Database;
-  RAW: R2Bucket;
+  DB: Database;
 }
 
 export interface ComposeIntent {
@@ -58,9 +58,13 @@ export async function sendNewEmailAttempt(
   const normalized = normalizeIntent(intent);
   const attachments = normalizeAttachments(intent.attachments ?? []);
   if (normalized.to.length !== 1 || !normalized.to[0]) {
-    throw new ComposeIntentError("New email requires exactly one recipient", 400);
+    throw new ComposeIntentError(
+      "New email requires exactly one recipient",
+      400,
+    );
   }
-  if (!normalized.subject) throw new ComposeIntentError("Subject is required", 400);
+  if (!normalized.subject)
+    throw new ComposeIntentError("Subject is required", 400);
   if (!normalized.text && attachments.length === 0) {
     throw new ComposeIntentError("Message text is required", 400);
   }
@@ -70,21 +74,30 @@ export async function sendNewEmailAttempt(
     if (existing.status === "sent" || existing.status === "failed") {
       return existingResult(existing, normalized, attachments);
     }
-    if (existing.status === "sending" && (!existing.message_id || !existing.thread_id)) {
+    if (
+      existing.status === "sending" &&
+      (!existing.message_id || !existing.thread_id)
+    ) {
       return existingResult(existing, normalized, attachments);
     }
   }
 
-  const inbox = await env.DB.prepare(
+  const inbox = await env.DB.one<{
+    id: number;
+    address: string;
+    domain_status: "pending" | "active" | null;
+  }>(
     `SELECT m.id, m.address, d.status AS domain_status
      FROM mailboxes m LEFT JOIN domains d ON d.id = m.domain_id
-     WHERE m.id = ?`,
-  )
-    .bind(normalized.mailboxId)
-    .first<{ id: number; address: string; domain_status: "pending" | "active" | null }>();
+     WHERE m.id = $1`,
+    [normalized.mailboxId],
+  );
   if (!inbox) throw new ComposeIntentError("Inbox not found", 404);
   if (inbox.domain_status !== "active") {
-    throw new ComposeIntentError("Inbox domain is not ready for outbound sending", 409);
+    throw new ComposeIntentError(
+      "Inbox domain is not ready for outbound sending",
+      409,
+    );
   }
 
   let staged: StagedAttachment[] = existing
@@ -93,38 +106,45 @@ export async function sendNewEmailAttempt(
 
   if (!existing) {
     try {
-      staged = await stageAttachments(
-        env.RAW,
-        normalized.mailboxId,
-        normalized.attemptId,
-        attachments,
-      );
-      await env.DB.prepare(
-        `INSERT INTO outbound_attempts
+      await env.DB.transaction(async (db) => {
+        await db.query("SELECT id FROM mailboxes WHERE id = $1 FOR UPDATE", [
+          normalized.mailboxId,
+        ]);
+        staged = await stageAttachments(
+          db,
+          normalized.mailboxId,
+          normalized.attemptId,
+          attachments,
+        );
+        await db.query(
+          `INSERT INTO outbound_attempts
            (id, mailbox_id, status, to_addresses, subject, text_body, attachments,
             actor_id, oauth_client_id, sent_by)
-         VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
-      )
-        .bind(
-          normalized.attemptId,
-          normalized.mailboxId,
-          JSON.stringify(normalized.to),
-          normalized.subject,
-          normalized.text,
-          JSON.stringify(staged),
-          normalized.actorId ?? null,
-          normalized.oauthClientId ?? null,
-          normalized.sentBy ?? "agent",
-        )
-        .run();
-      if (
-        normalized.actorId &&
-        normalized.dailySendLimit !== undefined &&
-        !(await claimDailySendBudget(env, normalized.actorId, normalized.dailySendLimit))
-      ) {
-        await markFailed(env, normalized.attemptId, "Daily MCP send limit reached");
-        throw new ComposeIntentError("Daily MCP send limit reached", 429);
-      }
+         VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9)`,
+          [
+            normalized.attemptId,
+            normalized.mailboxId,
+            JSON.stringify(normalized.to),
+            normalized.subject,
+            normalized.text,
+            JSON.stringify(staged),
+            normalized.actorId ?? null,
+            normalized.oauthClientId ?? null,
+            normalized.sentBy ?? "agent",
+          ],
+        );
+        if (
+          normalized.actorId &&
+          normalized.dailySendLimit !== undefined &&
+          !(await claimDailySendBudget(
+            { DB: db },
+            normalized.actorId,
+            normalized.dailySendLimit,
+          ))
+        ) {
+          throw new ComposeIntentError("Daily MCP send limit reached", 429);
+        }
+      });
     } catch (error) {
       if (error instanceof ComposeIntentError) throw error;
       const raced = await getAttempt(env, normalized.attemptId);
@@ -134,13 +154,12 @@ export async function sendNewEmailAttempt(
   }
 
   if (!existing || existing.status === "pending") {
-    const claimed = await env.DB.prepare(
+    const claimed = await env.DB.one<{ id: string }>(
       `UPDATE outbound_attempts
-       SET status = 'sending', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ? AND status = 'pending' RETURNING id`,
-    )
-      .bind(normalized.attemptId)
-      .first<{ id: string }>();
+       SET status = 'sending', updated_at = now()
+       WHERE id = $1 AND status = 'pending' RETURNING id`,
+      [normalized.attemptId],
+    );
     if (!claimed) {
       const raced = await getAttempt(env, normalized.attemptId);
       if (!raced) throw new ComposeIntentError("Send Attempt disappeared", 500);
@@ -152,27 +171,30 @@ export async function sendNewEmailAttempt(
   let conversationId = existing?.thread_id ?? null;
   if (conversationId === null) {
     try {
-      conversationId = randomThreadId();
-      await env.DB.batch([
-        env.DB.prepare(
-        `INSERT INTO threads
-           (id, mailbox_id, subject, normalized_subject, snippet, status, is_read,
-            message_count, last_message_at)
-         VALUES (?, ?, ?, ?, ?, 'open', 1, 0, ?)`,
-        ).bind(
-          conversationId,
-          normalized.mailboxId,
-          normalized.subject,
-          normalizeSubject(normalized.subject),
-          snippet(normalized.text),
-          now,
-        ),
-        env.DB.prepare(
-          `UPDATE outbound_attempts SET thread_id = ?, updated_at = ? WHERE id = ?`,
-        ).bind(conversationId, now, normalized.attemptId),
-      ]);
+      conversationId = await env.DB.transaction(async (db) => {
+        const thread = await db.one<{ id: number }>(
+          `INSERT INTO threads (mailbox_id, subject, normalized_subject, snippet, status, is_read, message_count, last_message_at)
+           VALUES ($1, $2, $3, $4, 'open', 1, 0, $5) RETURNING id`,
+          [
+            normalized.mailboxId,
+            normalized.subject,
+            normalizeSubject(normalized.subject),
+            snippet(normalized.text),
+            now,
+          ],
+        );
+        if (!thread) throw new Error("Conversation was not created");
+        await db.query(
+          "UPDATE outbound_attempts SET thread_id = $1, updated_at = $2 WHERE id = $3",
+          [thread.id, now, normalized.attemptId],
+        );
+        return thread.id;
+      });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not create Conversation";
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not create Conversation";
       await markFailed(env, normalized.attemptId, message);
       return failedResult(normalized.attemptId, null, message);
     }
@@ -187,30 +209,36 @@ export async function sendNewEmailAttempt(
         subject: normalized.subject,
         text: normalized.text,
         attachments: sendableAttachments(attachments),
-        autoSubmitted: normalized.sentBy === "human" ? undefined : "auto-generated",
+        autoSubmitted:
+          normalized.sentBy === "human" ? undefined : "auto-generated",
         attemptId: normalized.attemptId,
       }));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Email provider rejected the message";
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Email provider rejected the message";
       await env.DB.batch([
-        env.DB.prepare(
+        statement(
           `UPDATE outbound_attempts
-           SET status = 'failed', thread_id = NULL, error = ?,
-               updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-           WHERE id = ?`,
-        ).bind(message.slice(0, 2000), normalized.attemptId),
-        env.DB.prepare("DELETE FROM threads WHERE id = ? AND message_count = 0").bind(conversationId),
+           SET status = 'failed', thread_id = NULL, error = $1,
+               updated_at = now()
+           WHERE id = $2`,
+          [message.slice(0, 2000), normalized.attemptId],
+        ),
+        statement("DELETE FROM threads WHERE id = $1 AND message_count = 0", [
+          conversationId,
+        ]),
       ]);
       return failedResult(normalized.attemptId, null, message);
     }
     try {
-      await env.DB.prepare(
+      await env.DB.query(
         `UPDATE outbound_attempts
-         SET message_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-         WHERE id = ? AND status = 'sending'`,
-      )
-        .bind(messageId, normalized.attemptId)
-        .run();
+         SET message_id = $1, updated_at = now()
+         WHERE id = $2 AND status = 'sending'`,
+        [messageId, normalized.attemptId],
+      );
     } catch {
       console.error("Could not checkpoint provider result for Send Attempt", {
         attemptId: normalized.attemptId,
@@ -218,40 +246,53 @@ export async function sendNewEmailAttempt(
     }
   }
 
-  await env.DB.batch([
-    env.DB.prepare(
+  await env.DB.transaction(async (db) => {
+    const attempt = await db.one<{ status: string }>(
+      "SELECT status FROM outbound_attempts WHERE id = $1 FOR UPDATE", [normalized.attemptId],
+    );
+    if (!attempt) throw new ComposeIntentError("Send Attempt disappeared", 500);
+    if (attempt.status === "sent") return;
+  await db.batch([
+    statement(
       `INSERT INTO messages
          (thread_id, message_id, references_ids, direction, sent_by,
           from_address, from_name, to_addresses, reply_to_addresses,
           subject, text_body, created_at)
-       VALUES (?, ?, '[]', 'outbound', ?, ?, NULL, ?, '[]', ?, ?, ?)`,
-    ).bind(
-      conversationId,
-      messageId,
-      normalized.sentBy ?? "agent",
-      inbox.address,
-      JSON.stringify(normalized.to),
-      normalized.subject,
-      normalized.text,
-      now,
+       VALUES ($1, $2, '[]', 'outbound', $3, $4, NULL, $5, '[]', $6, $7, $8)`,
+      [
+        conversationId,
+        messageId,
+        normalized.sentBy ?? "agent",
+        inbox.address,
+        JSON.stringify(normalized.to),
+        normalized.subject,
+        normalized.text,
+        now,
+      ],
     ),
-    ...recordAttachmentStatements(env.DB, staged, messageId),
-    env.DB.prepare(
+    ...recordAttachmentStatements(staged, messageId),
+    statement(
       `UPDATE threads
-       SET message_count = 1, snippet = ?, last_message_at = ?, is_read = 1
-       WHERE id = ?`,
-    ).bind(
-      snippet(normalized.text) ||
-        staged.map((attachment) => attachment.filename ?? "attachment").join(", ").slice(0, 140),
-      now,
-      conversationId,
+       SET message_count = 1, snippet = $1, last_message_at = $2, is_read = 1
+       WHERE id = $3`,
+      [
+        snippet(normalized.text) ||
+          staged
+            .map((attachment) => attachment.filename ?? "attachment")
+            .join(", ")
+            .slice(0, 140),
+        now,
+        conversationId,
+      ],
     ),
-    env.DB.prepare(
+    statement(
       `UPDATE outbound_attempts
-       SET status = 'sent', message_id = ?, error = NULL, updated_at = ?
-       WHERE id = ?`,
-    ).bind(messageId, now, normalized.attemptId),
+       SET status = 'sent', message_id = $1, error = NULL, updated_at = $2
+       WHERE id = $3`,
+      [messageId, now, normalized.attemptId],
+    ),
   ]);
+  });
 
   return {
     ok: true,
@@ -262,20 +303,27 @@ export async function sendNewEmailAttempt(
   };
 }
 
-async function getAttempt(env: ComposeEnv, id: string): Promise<StoredAttempt | null> {
-  return env.DB.prepare("SELECT * FROM outbound_attempts WHERE id = ?")
-    .bind(id)
-    .first<StoredAttempt>();
+async function getAttempt(
+  env: ComposeEnv,
+  id: string,
+): Promise<StoredAttempt | null> {
+  return env.DB.one<StoredAttempt>(
+    "SELECT * FROM outbound_attempts WHERE id = $1",
+    [id],
+  );
 }
 
-async function markFailed(env: ComposeEnv, id: string, error: string): Promise<void> {
-  await env.DB.prepare(
+async function markFailed(
+  env: ComposeEnv,
+  id: string,
+  error: string,
+): Promise<void> {
+  await env.DB.query(
     `UPDATE outbound_attempts
-     SET status = 'failed', error = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE id = ?`,
-  )
-    .bind(error.slice(0, 2000), id)
-    .run();
+     SET status = 'failed', error = $1, updated_at = now()
+     WHERE id = $2`,
+    [error.slice(0, 2000), id],
+  );
 }
 
 function existingResult(
@@ -294,7 +342,10 @@ function existingResult(
     existing.oauth_client_id !== (intent.oauthClientId ?? null) ||
     (existing.sent_by ?? "agent") !== (intent.sentBy ?? "agent")
   ) {
-    throw new ComposeIntentError("Send Attempt id was already used for different content", 409);
+    throw new ComposeIntentError(
+      "Send Attempt id was already used for different content",
+      409,
+    );
   }
   return {
     ok: existing.status === "sent",
@@ -306,7 +357,11 @@ function existingResult(
   };
 }
 
-function failedResult(id: string, conversationId: number | null, error: string): ComposeAttemptResult {
+function failedResult(
+  id: string,
+  conversationId: number | null,
+  error: string,
+): ComposeAttemptResult {
   return {
     ok: false,
     attempt_id: id,
@@ -317,7 +372,10 @@ function failedResult(id: string, conversationId: number | null, error: string):
   };
 }
 
-interface NormalizedIntent extends Omit<ComposeIntent, "to" | "subject" | "text"> {
+interface NormalizedIntent extends Omit<
+  ComposeIntent,
+  "to" | "subject" | "text"
+> {
   to: string[];
   subject: string;
   text: string;
@@ -326,12 +384,14 @@ interface NormalizedIntent extends Omit<ComposeIntent, "to" | "subject" | "text"
 function normalizeIntent(intent: ComposeIntent): NormalizedIntent {
   return {
     ...intent,
-    to: [...new Map(
-      intent.to.map((address) => {
-        const normalized = normalizeEmailAddress(address);
-        return [normalized.toLowerCase(), normalized] as const;
-      }),
-    ).values()],
+    to: [
+      ...new Map(
+        intent.to.map((address) => {
+          const normalized = normalizeEmailAddress(address);
+          return [normalized.toLowerCase(), normalized] as const;
+        }),
+      ).values(),
+    ],
     subject: intent.subject.trim(),
     text: intent.text.trim(),
   };
@@ -346,11 +406,6 @@ function normalizeEmailAddress(address: string): string {
 
 function snippet(text: string): string {
   return text.replace(/\s+/g, " ").trim().slice(0, 140);
-}
-
-function randomThreadId(): number {
-  const bytes = crypto.getRandomValues(new Uint32Array(2));
-  return (bytes[0]! & 0x1fffff) * 0x1_0000_0000 + bytes[1]! + 1;
 }
 
 export class ComposeIntentError extends Error {

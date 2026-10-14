@@ -16,11 +16,10 @@ interface OutboundEmailBinding {
   }): Promise<{ messageId: string }>;
 }
 
-interface Env {
+interface WorkerEnv {
   WEB_ACCESS_TEAM_DOMAIN?: string;
   WEB_ACCESS_AUD?: string;
-  DB: D1Database;
-  RAW: R2Bucket;
+  HYPERDRIVE: Hyperdrive;
   EMAIL: OutboundEmailBinding;
   AI: Ai;
   DRAFT_QUEUE: Queue<{ runId: number }>;
@@ -30,4 +29,8 @@ interface Env {
   VAPID_PUBLIC_KEY?: string;
   VAPID_PRIVATE_JWK?: string;
   VAPID_SUBJECT?: string;
+}
+
+interface Env extends WorkerEnv {
+  DB: import("./database.ts").Database;
 }
